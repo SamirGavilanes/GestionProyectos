@@ -1,0 +1,14 @@
+﻿<div class="flex items-center gap-2 text-xs text-gray-600">
+    <button class="rounded border border-gray-300 px-2 py-0.5 hover:bg-gray-50 disabled:opacity-40" disabled="@(CurrentPage == 1)" @onclick="() => OnPageChange.InvokeAsync(CurrentPage - 1)">Anterior</button>
+    <span>@CurrentPage de @TotalPages</span>
+    <button class="rounded border border-gray-300 px-2 py-0.5 hover:bg-gray-50 disabled:opacity-40" disabled="@(CurrentPage == TotalPages)" @onclick="() => OnPageChange.InvokeAsync(CurrentPage + 1)">Siguiente</button>
+    <span class="text-gray-400">Total: @TotalItems</span>
+</div>
+
+@code {
+    [Parameter] public int CurrentPage { get; set; }
+    [Parameter] public int PageSize { get; set; }
+    [Parameter] public int TotalItems { get; set; }
+    [Parameter] public EventCallback<int> OnPageChange { get; set; }
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalItems / (double)PageSize));
+}

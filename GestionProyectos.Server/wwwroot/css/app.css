@@ -1,0 +1,59 @@
+/* Base tipográfica uniforme (13px → text-xs ≈ 9.75px, jerarquía por peso) */
+html, body {
+    font-size: 13px;
+    background-color: #f3f4f6;
+}
+
+
+
+/* Calendarios más compactos */
+
+input[type="date"],
+
+input[type="month"],
+
+input[type="datetime-local"],
+
+input.date-input {
+
+    height: 2.25rem;
+
+    min-height: 2.25rem;
+
+    padding-top: 0.25rem;
+
+    padding-bottom: 0.25rem;
+
+    line-height: 1.25rem;
+
+}
+
+
+
+input[type="date"]::-webkit-calendar-picker-indicator,
+
+input[type="month"]::-webkit-calendar-picker-indicator,
+
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+
+    width: 1rem;
+
+    height: 1rem;
+
+    cursor: pointer;
+
+    opacity: 0.6;
+
+}
+
+
+
+/* Scrollbar */
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+

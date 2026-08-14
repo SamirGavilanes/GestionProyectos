@@ -1,0 +1,83 @@
+<div class="@Tw.FacetOptionList">
+    @if (Options.Count == 0)
+    {
+        <p class="@Tw.FacetOptionEmpty">Sin opciones</p>
+    }
+    else
+    {
+        @foreach (var option in Options)
+        {
+            var isChecked = GetChecked(option.Id);
+            <label class="@Tw.FacetOptionItem" @key="@($"{option.Id}-{isChecked}")">
+                <input type="checkbox"
+                       class="@Tw.FacetOptionCheckbox"
+                       checked="@isChecked"
+                       @onchange="e => OnChangeAsync(option.Id, e)" />
+                <span class="@Tw.FacetOptionLabel">@option.Label</span>
+                <span class="@Tw.FacetOptionCount">(@option.Count)</span>
+            </label>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<FacetOption> Options { get; set; } = Array.Empty<FacetOption>();
+    [Parameter] public bool MultiSelect { get; set; } = true;
+    [Parameter] public IReadOnlySet<long> SelectedIds { get; set; } = new HashSet<long>();
+    [Parameter] public EventCallback<IReadOnlySet<long>> SelectedIdsChanged { get; set; }
+    [Parameter] public long SelectedId { get; set; }
+    [Parameter] public EventCallback<long> SelectedIdChanged { get; set; }
+
+    private readonly Dictionary<long, bool> checkedStates = new();
+
+    protected override void OnParametersSet()
+    {
+        checkedStates.Clear();
+        foreach (var option in Options)
+            checkedStates[option.Id] = IsSelected(option.Id);
+    }
+
+    private bool IsSelected(long id) =>
+        MultiSelect ? SelectedIds.Contains(id) : id == SelectedId;
+
+    private bool GetChecked(long id) =>
+        checkedStates.TryGetValue(id, out var value) ? value : IsSelected(id);
+
+    private async System.Threading.Tasks.Task OnChangeAsync(long id, ChangeEventArgs e)
+    {
+        var isChecked = e.Value is bool b && b;
+
+        if (!MultiSelect)
+        {
+            if (isChecked)
+            {
+                foreach (var optionId in checkedStates.Keys.ToList())
+                    checkedStates[optionId] = optionId == id;
+            }
+            else if (IsSelected(id))
+            {
+                checkedStates[id] = false;
+            }
+            else
+            {
+                return;
+            }
+
+            var next = isChecked ? id : 0L;
+            if (SelectedId != next && SelectedIdChanged.HasDelegate)
+                await SelectedIdChanged.InvokeAsync(next);
+            return;
+        }
+
+        checkedStates[id] = isChecked;
+
+        var nextIds = new HashSet<long>(SelectedIds);
+        if (isChecked)
+            nextIds.Add(id);
+        else
+            nextIds.Remove(id);
+
+        if (SelectedIdsChanged.HasDelegate)
+            await SelectedIdsChanged.InvokeAsync(nextIds);
+    }
+}

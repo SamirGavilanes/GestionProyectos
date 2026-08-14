@@ -1,0 +1,988 @@
+﻿@page "/index"
+
+@inject IJSRuntime JSRuntime
+
+@inject IDashboardReadEngine dashboardReadEngine
+
+@inject ISessionStorageService session
+
+@inject NavigationManager Navigation
+
+
+
+@using Blazored.SessionStorage
+
+@using GestionProyectos.Engine.Feature.Dashboard
+
+@using GestionProyectos.Engine.Feature.Dashboard.Request
+
+@using GestionProyectos.Engine.Feature.Dashboard.Response
+
+@using GestionProyectos.Engine.Security.Utilities
+
+@using GestionProyectos.Server.Extensions
+
+@using Microsoft.AspNetCore.Components.Authorization
+
+@using System.Globalization
+
+
+
+@attribute [Authorize]
+
+@implements IDisposable
+
+
+
+<PageTitle>Inicio</PageTitle>
+
+
+
+<AuthorizeView Context="authContext">
+
+    <Authorized>
+
+        @{
+
+            var userName = authContext.User.Claims.FirstOrDefault(x => x.Type == "Name")?.Value ?? authContext.User.Identity?.Name;
+
+        }
+
+
+
+        <PageHeader Title="Mi panel de trabajo"
+                    Subtitle="@($"Bienvenido, {userName} · {DateTime.Now.ToString("dddd, dd MMM yyyy", EsCulture)}")"
+                    ShowFacetsToggle="true"
+                    FacetsVisible="showFacets"
+                    FacetsVisibleChanged="@(v => showFacets = v)"
+                    ActiveFilterCount="@GetActiveFilterCount()">
+            <Actions>
+                <ListPageToolbar OnRefresh="LoadDataAsync" Refreshing="@loading" />
+            </Actions>
+        </PageHeader>
+
+        <FilteredPageLayout FacetsVisible="showFacets"
+                            FacetsVisibleChanged="@(v => showFacets = v)"
+                            ActiveFilterCount="@GetActiveFilterCount()"
+                            OnClearFacets="ClearFilters">
+            <Facets>
+                <FacetSection Title="Proyecto">
+                    <FacetCheckboxList Options="projectOptions"
+                                       MultiSelect="false"
+                                       SelectedId="projectFilter"
+                                       SelectedIdChanged="OnProjectFilterChange" />
+                </FacetSection>
+                <FacetSection Title="Periodo">
+                    <FacetDatePeriod StartDate="filterStartDate"
+                                     StartDateChanged="v => filterStartDate = v"
+                                     EndDate="filterEndDate"
+                                     EndDateChanged="v => filterEndDate = v"
+                                     Preset="datePreset"
+                                     PresetChanged="v => datePreset = v"
+                                     Counts="periodCounts"
+                                     OnChanged="OnPeriodChanged" />
+                </FacetSection>
+            </Facets>
+            <ChildContent>
+
+        @if (!string.IsNullOrWhiteSpace(loadError))
+
+        {
+
+            <div class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">@loadError</div>
+
+        }
+
+        @if (loading && data == null)
+        {
+            <p class="text-xs text-gray-500">Cargando panel...</p>
+        }
+        else if (data != null)
+        {
+            <div class="mb-4 grid gap-3 lg:grid-cols-3">
+                <div class="rounded-xl border border-gray-200 bg-white p-3 shadow-sm border-t-2 border-t-primary-600">
+                    <div class="mb-2.5 flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-2">
+                            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-700">
+                                <LucideIcon Name="list-checks" CssClass="h-4 w-4" />
+                            </span>
+                            <span class="text-xs font-semibold text-gray-800">Tareas</span>
+                        </div>
+                        <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2.5 text-xs shrink-0")" @onclick="GoToTaskManagement">
+                            <LucideIcon Name="arrow-right" CssClass="h-3.5 w-3.5" /> Gestionar
+                        </button>
+                    </div>
+                    <div class="flex flex-col items-center">
+                        <div class="relative mx-auto h-36 w-36">
+                            @if (HasTaskChartData(data))
+                            {
+                                <canvas @ref="taskChartCanvasRef" aria-label="Distribución de tareas por estado"></canvas>
+                            }
+                            else
+                            {
+                                <div class="flex h-full w-full flex-col items-center justify-center rounded-full border-2 border-dashed border-gray-200 bg-gray-50 text-center">
+                                    <span class="text-xs font-bold tabular-nums text-gray-300">0</span>
+                                    <span class="text-xs text-gray-400">Sin tareas</span>
+                                </div>
+                            }
+                        </div>
+                        @if (HasTaskChartData(data))
+                        {
+                            <div class="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1">
+                                @foreach (var slice in GetTaskChartLegend(data))
+                                {
+                                    <span class="inline-flex items-center gap-1 text-xs text-gray-600">
+                                        <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: @slice.Color"></span>
+                                        @slice.Label (@((int)slice.Value))
+                                    </span>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="rounded-xl border border-gray-200 bg-white p-3 shadow-sm border-t-2 border-t-amber-500">
+                    <div class="mb-2.5 flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-2">
+                            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
+                                <LucideIcon Name="bug" CssClass="h-4 w-4" />
+                            </span>
+                            <span class="text-xs font-semibold text-gray-800">Bugs</span>
+                        </div>
+                        <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2.5 text-xs shrink-0")" @onclick="GoToBugList">
+                            <LucideIcon Name="arrow-right" CssClass="h-3.5 w-3.5" /> Ver listado
+                        </button>
+                    </div>
+                    <div class="flex flex-col items-center">
+                        <div class="relative mx-auto h-36 w-36">
+                            @if (HasBugChartData(data))
+                            {
+                                <canvas @ref="bugChartCanvasRef" aria-label="Distribución de bugs por estado"></canvas>
+                            }
+                            else
+                            {
+                                <div class="flex h-full w-full flex-col items-center justify-center rounded-full border-2 border-dashed border-amber-200 bg-amber-50/50 text-center">
+                                    <span class="text-xs font-bold tabular-nums text-amber-300">0</span>
+                                    <span class="text-xs text-amber-400">Sin bugs</span>
+                                </div>
+                            }
+                        </div>
+                        @if (HasBugChartData(data))
+                        {
+                            <div class="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1">
+                                @foreach (var slice in GetBugChartLegend(data))
+                                {
+                                    <span class="inline-flex items-center gap-1 text-xs text-gray-600">
+                                        <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: @slice.Color"></span>
+                                        @slice.Label (@((int)slice.Value))
+                                    </span>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="rounded-xl border border-gray-200 bg-white p-3 shadow-sm border-t-2 border-t-violet-500">
+                    <div class="mb-2.5 flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-2">
+                            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-700">
+                                <LucideIcon Name="folder-kanban" CssClass="h-4 w-4" />
+                            </span>
+                            <div>
+                                <span class="text-xs font-semibold text-gray-800">Proyectos</span>
+                                <p class="text-xs text-gray-500">% horas · @GetWorkPeriodShortLabel(data)</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex flex-col items-center">
+                        <div class="relative mx-auto h-36 w-36">
+                            @if (HasProjectsChartData(data))
+                            {
+                                <canvas @ref="projectsGaugeCanvasRef" aria-label="Distribución de horas por proyecto"></canvas>
+                            }
+                            else
+                            {
+                                <div class="flex h-full w-full flex-col items-center justify-center rounded-full border-2 border-dashed border-violet-200 bg-violet-50/40 text-center">
+                                    <span class="text-xs font-bold tabular-nums text-violet-300">0</span>
+                                    <span class="text-xs text-violet-400">Sin horas</span>
+                                </div>
+                            }
+                        </div>
+                        @if (HasProjectsChartData(data))
+                        {
+                            <div class="mt-2 w-full max-w-xs space-y-1">
+                                @foreach (var slice in GetProjectsChartLegend(data))
+                                {
+                                    <div class="flex items-center justify-between gap-2 text-xs">
+                                        <span class="inline-flex min-w-0 items-center gap-1.5 text-gray-700">
+                                            <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: @slice.Color"></span>
+                                            <span class="truncate" title="@slice.FullLabel">@slice.Label</span>
+                                        </span>
+                                        <span class="shrink-0 font-semibold tabular-nums text-violet-700">
+                                            @FormatPercent(slice.Percent) · @FormatHours((decimal)slice.Value) h
+                                        </span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        else if (data.AssignedProjectsCount > 0)
+                        {
+                            <p class="mt-2 text-center text-xs text-gray-500">Sin horas registradas en el periodo.</p>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-3">
+                <AccordionSection Title="Ausencias del equipo"
+                                  Subtitle="@($"Fuera hoy: {data.OutToday.Count} · Próxima semana: {data.UpcomingVacations.Count}")"
+                                  Icon="calendar-days"
+                                  IsOpen="@(openSection == "absences")"
+                                  IsOpenChanged='v => OnSectionToggled("absences", v)'
+                                  ContainerClass="border-sky-200 bg-gradient-to-r from-sky-50/50 to-white"
+                                  HeaderClass="hover:bg-sky-50/60 !py-2"
+                                  BodyClass="border-sky-100 !px-3 !py-2"
+                                  IconWrapClass="bg-sky-100 text-sky-700">
+                    <HeaderActions>
+                        <a href="/absence-list" class="text-xs font-medium text-sky-700 hover:underline">Ver calendario</a>
+                    </HeaderActions>
+                    <ChildContent>
+                        <div class="grid gap-0 md:grid-cols-2 md:divide-x md:divide-sky-100">
+                            <div class="md:pr-4">
+                                <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-sky-800/80">Fuera hoy · @DateTime.Today.ToString("dddd dd MMM", EsCulture)</p>
+                                @if (data.OutToday.Count == 0)
+                                {
+                                    <p class="text-xs text-gray-500">Todo el equipo disponible hoy.</p>
+                                }
+                                else
+                                {
+                                    <ul class="space-y-1">
+                                        @foreach (var item in data.OutToday)
+                                        {
+                                            <li class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                                                <span class="font-medium text-gray-900">@item.UserName</span>
+                                                <span class="@GetTimeOffBadgeClass(item.Type)">@item.TypeLabel</span>
+                                                <span class="text-gray-500">@FormatTimeOffRange(item)</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                            <div class="border-t border-sky-100 pt-3 md:border-t-0 md:pt-0 md:pl-4">
+                                <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-blue-800/80">Vacaciones próxima semana</p>
+                                @if (data.UpcomingVacations.Count == 0)
+                                {
+                                    <p class="text-xs text-gray-500">Nadie inicia vacaciones en los próximos 7 días.</p>
+                                }
+                                else
+                                {
+                                    <ul class="space-y-1">
+                                        @foreach (var item in data.UpcomingVacations)
+                                        {
+                                            <li class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                                                <span class="font-medium text-gray-900">@item.UserName</span>
+                                                <span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800">Sale @item.StartDate.ToString("dd/MM")</span>
+                                                <span class="text-gray-500">hasta @item.EndDate.ToString("dd/MM/yyyy")</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                        </div>
+                    </ChildContent>
+                </AccordionSection>
+
+                <AccordionSection Title="Mis tareas asignadas"
+                                  Subtitle="Tareas abiertas a tu cargo ahora mismo"
+                                  Icon="list-checks"
+                                  IsOpen="@(openSection == "tasks")"
+                                  IsOpenChanged='v => OnSectionToggled("tasks", v)'
+                                  HeaderClass="!py-2"
+                                  BodyClass="!px-3 !py-2"
+                                  IconWrapClass="bg-primary-50 text-primary-700">
+                    <Badge>
+                        <span class="rounded-full bg-primary-100 px-2 py-0.5 text-xs font-semibold text-primary-800">@data.MyAssignedTasks.Count</span>
+                    </Badge>
+                    <ChildContent>
+                        @if (data.MyAssignedTasks.Count == 0)
+                        {
+                            <p class="py-6 text-center text-xs text-gray-500">No tienes tareas activas con estos filtros.</p>
+                        }
+                        else
+                        {
+                            <div class="@Tw.TableWrapContained max-h-64 overflow-y-auto">
+                                <table class="@Tw.Table">
+                                    <colgroup>
+                                        <col />
+                                        <col class="w-[7.5rem]" />
+                                        <col class="w-[5.5rem]" />
+                                        <col class="w-[3.25rem]" />
+                                        <col class="w-[3.25rem]" />
+                                    </colgroup>
+                                    <thead>
+                                        <tr>
+                                            <th class="@Tw.Th">Tarea</th>
+                                            <th class="@Tw.Th">Proyecto</th>
+                                            <th class="@Tw.Th">Estado</th>
+                                            <th class="@($"{Tw.Th} text-right")">Est.</th>
+                                            <th class="@($"{Tw.Th} text-right")">Real</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var item in data.MyAssignedTasks)
+                                        {
+                                            <tr class="hover:bg-gray-50/80">
+                                                <td class="@Tw.Td">
+                                                    <button type="button" class="block w-full truncate text-left font-medium text-primary-700 hover:underline" @onclick="() => GoToTask(item.TaskId)">
+                                                        #@item.TaskId · @item.TaskDescription
+                                                    </button>
+                                                </td>
+                                                <td class="@Tw.TdText">@item.ProjectName</td>
+                                                <td class="@Tw.Td"><StatusBadge Compact="true" Label="@item.StatusName" Color="@item.StatusBadgeColor" /></td>
+                                                <td class="@($"{Tw.Td} text-right tabular-nums")">@FormatHours(item.PlannedHours)</td>
+                                                <td class="@($"{Tw.Td} text-right tabular-nums")">@FormatHours(item.ActualHours)</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </ChildContent>
+                </AccordionSection>
+
+                <AccordionSection Title="Mis bugs asignados"
+                                  Subtitle="Bugs vinculados a tus tareas"
+                                  Icon="bug"
+                                  IsOpen="@(openSection == "bugs")"
+                                  IsOpenChanged='v => OnSectionToggled("bugs", v)'
+                                  HeaderClass="!py-2"
+                                  BodyClass="!px-3 !py-2"
+                                  IconWrapClass="bg-amber-50 text-amber-700">
+                    <Badge>
+                        <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">@data.MyAssignedBugs.Count</span>
+                    </Badge>
+                    <ChildContent>
+                        @if (data.MyAssignedBugs.Count == 0)
+                        {
+                            <p class="py-6 text-center text-xs text-gray-500">No tienes bugs asignados con estos filtros.</p>
+                        }
+                        else
+                        {
+                            <div class="@Tw.TableWrapContained max-h-64 overflow-y-auto">
+                                <table class="@Tw.Table">
+                                    <colgroup>
+                                        <col />
+                                        <col class="w-[7rem]" />
+                                        <col class="w-[3.5rem]" />
+                                        <col class="w-[5.5rem]" />
+                                    </colgroup>
+                                    <thead>
+                                        <tr>
+                                            <th class="@Tw.Th">Bug</th>
+                                            <th class="@Tw.Th">Proyecto</th>
+                                            <th class="@Tw.Th">Tarea</th>
+                                            <th class="@Tw.Th">Estado</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var bug in data.MyAssignedBugs)
+                                        {
+                                            <tr class="hover:bg-gray-50/80">
+                                                <td class="@Tw.Td">
+                                                    <button type="button" class="block w-full truncate text-left font-medium text-primary-700 hover:underline" @onclick="GoToBugList">
+                                                        #@bug.BugId · @bug.Description
+                                                    </button>
+                                                </td>
+                                                <td class="@Tw.TdText">@bug.ProjectName</td>
+                                                <td class="@Tw.Td">
+                                                    @if (bug.TaskId.HasValue)
+                                                    {
+                                                        <button type="button" class="text-primary-700 hover:underline" @onclick="() => GoToTask(bug.TaskId!.Value)">#@bug.TaskId</button>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="text-gray-400">—</span>
+                                                    }
+                                                </td>
+                                                <td class="@Tw.Td"><StatusBadge Compact="true" Label="@bug.StatusName" Color="@bug.StatusBadgeColor" /></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </ChildContent>
+                </AccordionSection>
+
+                <AccordionSection Title="Mis tareas demoradas"
+                                  Subtitle="Superaste las horas planificadas y la tarea sigue abierta"
+                                  Icon="alert-triangle"
+                                  IsOpen="@(openSection == "delayed")"
+                                  IsOpenChanged='v => OnSectionToggled("delayed", v)'
+                                  ContainerClass="@(data.MyDelayedTasks.Count > 0 ? "border-red-200" : "border-gray-200")"
+                                  HeaderClass="!py-2"
+                                  BodyClass="!px-3 !py-2"
+                                  IconWrapClass="@(data.MyDelayedTasks.Count > 0 ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600")">
+                    <Badge>
+                        @if (data.MyDelayedTasks.Count > 0)
+                        {
+                            <span class="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+                                <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500"></span>
+                                @data.MyDelayedTasks.Count
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">OK</span>
+                        }
+                    </Badge>
+                    <ChildContent>
+                        @if (data.MyDelayedTasks.Count == 0)
+                        {
+                            <div class="flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 py-8 text-center">
+                                <LucideIcon Name="check-circle-2" CssClass="mb-2 h-8 w-8 text-emerald-500" />
+                                <p class="text-xs font-medium text-gray-700">Sin tareas demoradas</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                @foreach (var item in data.MyDelayedTasks)
+                                {
+                                    <div class="rounded-lg border border-red-100 bg-red-50/40 px-3 py-2">
+                                        <button type="button" class="block text-left text-xs font-medium text-gray-900 hover:text-primary-700" @onclick="() => GoToTask(item.TaskId)">
+                                            #@item.TaskId · @item.TaskDescription
+                                        </button>
+                                        <p class="mt-0.5 truncate text-xs text-gray-500">@item.ProjectName · @item.StatusName</p>
+                                        <div class="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+                                            <span class="text-gray-600">@FormatHours(item.ActualHours) / @FormatHours(item.PlannedHours) h</span>
+                                            <span class="rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-800">+@FormatHours(item.OvertimeHours) h</span>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </ChildContent>
+                </AccordionSection>
+
+                <AccordionSection Title="Tareas realizadas en el periodo"
+                                  Subtitle="@($"Planificado vs. real · {GetWorkPeriodLabel(data)}")"
+                                  Icon="calendar-range"
+                                  IsOpen="@(openSection == "worked")"
+                                  IsOpenChanged='v => OnSectionToggled("worked", v)'
+                                  HeaderClass="!py-2"
+                                  BodyClass="!px-3 !py-2"
+                                  IconWrapClass="bg-secondary-50 text-secondary-700">
+                    <Badge>
+                        <span class="rounded-full bg-secondary-100 px-2 py-0.5 text-xs font-semibold text-secondary-800">@data.MyWorkedTasks.Count</span>
+                    </Badge>
+                    <ChildContent>
+                        @if (data.MyWorkedTasks.Count == 0)
+                        {
+                            <p class="py-6 text-center text-xs text-gray-500">No registraste actividad entre @GetWorkPeriodLabel(data).</p>
+                        }
+                        else
+                        {
+                            <div class="@Tw.TableWrapContained max-h-64 overflow-y-auto">
+                                <table class="@Tw.Table">
+                                    <colgroup>
+                                        <col />
+                                        <col class="w-[7rem]" />
+                                        <col class="w-[5rem]" />
+                                        <col class="w-[3.25rem]" />
+                                        <col class="w-[3.25rem]" />
+                                        <col class="w-[4rem]" />
+                                        <col class="w-[2.75rem]" />
+                                    </colgroup>
+                                    <thead>
+                                        <tr>
+                                            <th class="@Tw.Th">Tarea</th>
+                                            <th class="@Tw.Th">Proyecto</th>
+                                            <th class="@Tw.Th">Estado</th>
+                                            <th class="@($"{Tw.Th} text-right")">Plan.</th>
+                                            <th class="@($"{Tw.Th} text-right")">Real</th>
+                                            <th class="@($"{Tw.Th} text-right")">Desv.</th>
+                                            <th class="@($"{Tw.Th} text-center")">Bugs</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var item in data.MyWorkedTasks)
+                                        {
+                                            <tr class="hover:bg-gray-50/80">
+                                                <td class="@Tw.Td">
+                                                    <button type="button" class="block w-full truncate text-left font-medium text-primary-700 hover:underline" @onclick="() => GoToTask(item.TaskId)">
+                                                        #@item.TaskId · @item.TaskDescription
+                                                    </button>
+                                                </td>
+                                                <td class="@Tw.TdText">@item.ProjectName</td>
+                                                <td class="@Tw.Td"><StatusBadge Compact="true" Label="@item.StatusName" Color="@item.StatusBadgeColor" /></td>
+                                                <td class="@($"{Tw.Td} text-right tabular-nums")">@FormatHours(item.PlannedHours)</td>
+                                                <td class="@($"{Tw.Td} text-right tabular-nums")">@FormatHours(item.ActualHours)</td>
+                                                <td class="@($"{Tw.Td} text-right font-semibold tabular-nums {GetDeviationClass(item.DeviationPercent)}")">
+                                                    @FormatDeviation(item.DeviationPercent)
+                                                </td>
+                                                <td class="@($"{Tw.Td} text-center tabular-nums")">@item.BugCount</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </ChildContent>
+                </AccordionSection>
+            </div>
+        }
+
+            </ChildContent>
+        </FilteredPageLayout>
+
+    </Authorized>
+
+</AuthorizeView>
+
+
+
+@code {
+
+    private static readonly CultureInfo EsCulture = new("es-ES");
+
+
+
+    private Context sessionContext = new();
+
+    private DashboardReadResponse? data;
+
+    private string? loadError;
+
+    private bool loading = true;
+
+    private System.Threading.Timer? refreshTimer;
+
+
+
+    private long projectFilter;
+
+    private DateTime filterStartDate;
+    private DateTime filterEndDate;
+    private DatePeriodPreset datePreset = DatePeriodHelper.DefaultPreset;
+    private IReadOnlyDictionary<DatePeriodPreset, int> periodCounts = new Dictionary<DatePeriodPreset, int>();
+    private List<DashboardMyTaskItem> periodCountWorkedTasks = new();
+
+    private List<FacetOption> projectOptions = new();
+
+    private string? openSection;
+
+    private bool showFacets = false;
+
+    private ElementReference taskChartCanvasRef;
+    private ElementReference bugChartCanvasRef;
+    private ElementReference projectsGaugeCanvasRef;
+    private bool pendingChartRender;
+
+    private const string TaskChartKey = "dashboard-tasks";
+    private const string BugChartKey = "dashboard-bugs";
+    private const string ProjectsGaugeKey = "dashboard-projects";
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+
+    {
+
+        sessionContext = await session!.GetStorage<Context>("session") ?? new();
+
+        datePreset = DatePeriodHelper.DefaultPreset;
+        DatePeriodHelper.ApplyPreset(datePreset, out filterStartDate, out filterEndDate);
+
+        refreshTimer = new System.Threading.Timer(_ => _ = InvokeAsync(RefreshLiveAsync), null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+
+        await LoadDataAsync();
+
+    }
+
+
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (pendingChartRender && data != null)
+        {
+            pendingChartRender = false;
+            await RenderDashboardChartsAsync();
+        }
+    }
+
+
+
+    private async System.Threading.Tasks.Task LoadDataAsync()
+
+    {
+
+        loading = true;
+
+        loadError = null;
+
+
+
+        var response = dashboardReadEngine.Execute(new DashboardReadRequest
+
+        {
+
+            Context = sessionContext,
+
+            ProjectId = projectFilter,
+
+            WorkStartDate = filterStartDate,
+
+            WorkEndDate = filterEndDate
+
+        });
+
+
+
+        if (!response.Success || response.Data == null)
+
+        {
+
+            loadError = string.IsNullOrWhiteSpace(response.Message?.Description)
+
+                ? "No se pudo cargar el panel."
+
+                : response.Message.Description;
+
+            data = null;
+
+        }
+
+        else
+
+        {
+
+            data = response.Data;
+
+            filterStartDate = data.WorkStartDate;
+
+            filterEndDate = data.WorkEndDate;
+            datePreset = DatePeriodHelper.DetectPreset(filterStartDate, filterEndDate);
+            await LoadPeriodCountSourceAsync();
+            RefreshFacetOptions();
+        }
+
+
+
+        loading = false;
+
+        pendingChartRender = data != null;
+        await InvokeAsync(StateHasChanged);
+
+    }
+
+
+
+    private async System.Threading.Tasks.Task RefreshLiveAsync()
+
+    {
+
+        var response = dashboardReadEngine.Execute(new DashboardReadRequest
+
+        {
+
+            Context = sessionContext,
+
+            ProjectId = projectFilter,
+
+            WorkStartDate = filterStartDate,
+
+            WorkEndDate = filterEndDate
+
+        });
+
+
+
+        if (!response.Success || response.Data == null || data == null)
+
+            return;
+
+
+
+        data.MyAssignedTasks = response.Data.MyAssignedTasks;
+
+        data.MyAssignedBugs = response.Data.MyAssignedBugs;
+
+        data.MyDelayedTasks = response.Data.MyDelayedTasks;
+
+        data.MyWorkedTasks = response.Data.MyWorkedTasks;
+
+        data.WorkedProjects = response.Data.WorkedProjects;
+        data.WorkedProjectsCount = response.Data.WorkedProjectsCount;
+        data.AssignedProjectsCount = response.Data.AssignedProjectsCount;
+
+        data.OutToday = response.Data.OutToday;
+
+        data.UpcomingVacations = response.Data.UpcomingVacations;
+
+        pendingChartRender = true;
+        RefreshFacetOptions();
+        await InvokeAsync(StateHasChanged);
+
+    }
+
+    private void RefreshFacetOptions()
+    {
+        if (data?.FilterOptions.Projects == null)
+        {
+            projectOptions = new();
+            return;
+        }
+
+        var sourceItems = data.MyAssignedTasks
+            .Concat(data.MyDelayedTasks)
+            .Concat(data.MyWorkedTasks)
+            .GroupBy(t => t.TaskId)
+            .Select(g => g.First())
+            .ToList();
+
+        var catalog = data.FilterOptions.Projects.Select(p => (p.Id, p.Label));
+        projectOptions = catalog.ToFacetOptions(
+            sourceItems,
+            t => t.ProjectId,
+            _ => true,
+            projectFilter);
+
+        periodCounts = DatePeriodHelper.CountByPresets(
+            (rangeStart, rangeEnd) => periodCountWorkedTasks.Count(t =>
+                t.LastWorkDate.HasValue
+                && DatePeriodHelper.IsDateInRange(t.LastWorkDate.Value, rangeStart, rangeEnd)),
+            filterStartDate,
+            filterEndDate);
+    }
+
+    private async System.Threading.Tasks.Task LoadPeriodCountSourceAsync()
+    {
+        var (rangeStart, rangeEnd) = DatePeriodHelper.GetRange(DatePeriodPreset.LastYear);
+        var response = dashboardReadEngine.Execute(new DashboardReadRequest
+        {
+            Context = sessionContext,
+            ProjectId = projectFilter,
+            WorkStartDate = rangeStart,
+            WorkEndDate = rangeEnd
+        });
+
+        periodCountWorkedTasks = response.Success && response.Data != null
+            ? response.Data.MyWorkedTasks
+            : new();
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+
+
+    private async System.Threading.Tasks.Task OnProjectFilterChange(long id)
+
+    {
+
+        projectFilter = id;
+
+        await LoadDataAsync();
+
+    }
+
+
+
+    private async System.Threading.Tasks.Task OnPeriodChanged() => await LoadDataAsync();
+
+    private void GoToTask(long taskId) => Navigation.NavigateTo($"/task-detail/{taskId}");
+
+    private void GoToBugList() => Navigation.NavigateTo("/task-bug-list");
+
+
+
+    private void OnSectionToggled(string section, bool isOpen) =>
+        openSection = isOpen ? section : openSection == section ? null : openSection;
+
+    private void GoToTaskManagement() => Navigation.NavigateTo("/task-management");
+
+    private static string FormatHours(decimal hours) => hours.ToString("0.##");
+
+    private static string FormatDeviation(double percent) => percent >= 0 ? $"+{percent:0.#}%" : $"{percent:0.#}%";
+
+    private static string GetDeviationClass(double percent) => percent > 0 ? "text-red-600" : percent < 0 ? "text-emerald-600" : "text-gray-700";
+
+
+
+    private static string GetWorkPeriodLabel(DashboardReadResponse data) =>
+        data.WorkStartDate.Date == data.WorkEndDate.Date
+            ? data.WorkStartDate.ToString("dd/MM/yyyy", EsCulture)
+            : $"{data.WorkStartDate:dd/MM/yyyy} – {data.WorkEndDate:dd/MM/yyyy}";
+
+    private static string GetWorkPeriodShortLabel(DashboardReadResponse data) =>
+        data.WorkStartDate.Date == data.WorkEndDate.Date
+            ? data.WorkStartDate.ToString("dd/MM", EsCulture)
+            : $"{data.WorkStartDate:dd/MM} – {data.WorkEndDate:dd/MM}";
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (projectFilter > 0) count++;
+        if (DatePeriodHelper.IsFilterActive(datePreset, filterStartDate, filterEndDate)) count++;
+        return count;
+    }
+
+    private async System.Threading.Tasks.Task ClearFilters()
+    {
+        projectFilter = 0;
+        datePreset = DatePeriodHelper.DefaultPreset;
+        DatePeriodHelper.ApplyPreset(datePreset, out filterStartDate, out filterEndDate);
+        RefreshFacetOptions();
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task RenderDashboardChartsAsync()
+    {
+        if (data == null) return;
+
+        if (HasTaskChartData(data))
+        {
+            var taskPayload = BuildStatusChartPayload(GetTaskChartLegend(data));
+            await JSRuntime.InvokeVoidAsync("renderDashboardStatusChart", taskChartCanvasRef, taskPayload, TaskChartKey);
+        }
+        else
+        {
+            await JSRuntime.InvokeVoidAsync("disposeDashboardStatusChart", TaskChartKey);
+        }
+
+        if (HasBugChartData(data))
+        {
+            var bugPayload = BuildStatusChartPayload(GetBugChartLegend(data));
+            await JSRuntime.InvokeVoidAsync("renderDashboardStatusChart", bugChartCanvasRef, bugPayload, BugChartKey);
+        }
+        else
+        {
+            await JSRuntime.InvokeVoidAsync("disposeDashboardStatusChart", BugChartKey);
+        }
+
+        if (HasProjectsChartData(data))
+        {
+            var projectsPayload = BuildStatusChartPayload(GetProjectsChartLegend(data));
+            await JSRuntime.InvokeVoidAsync("renderDashboardStatusChart", projectsGaugeCanvasRef, projectsPayload, ProjectsGaugeKey);
+        }
+        else
+        {
+            await JSRuntime.InvokeVoidAsync("disposeDashboardStatusChart", ProjectsGaugeKey);
+        }
+    }
+
+    private static bool HasProjectsChartData(DashboardReadResponse data) =>
+        data.WorkedProjects.Count > 0;
+
+    private static readonly string[] ProjectChartColors =
+    {
+        "#7c3aed", "#8b5cf6", "#6366f1", "#4f46e5", "#0d9488", "#14b8a6", "#a855f7"
+    };
+
+    private static List<ChartLegendSlice> GetProjectsChartLegend(DashboardReadResponse data)
+    {
+        var totalHours = data.WorkedProjects.Sum(p => p.HoursInPeriod);
+        return data.WorkedProjects
+            .Select((project, index) =>
+            {
+                var percent = totalHours > 0
+                    ? Math.Round((double)(project.HoursInPeriod / totalHours * 100m), 1)
+                    : 0;
+                return new ChartLegendSlice(
+                    TruncateChartLabel(project.ProjectName),
+                    ProjectChartColors[index % ProjectChartColors.Length],
+                    (double)project.HoursInPeriod,
+                    percent,
+                    project.ProjectName);
+            })
+            .ToList();
+    }
+
+    private static string TruncateChartLabel(string text, int maxLength = 22) =>
+        text.Length <= maxLength ? text : text[..(maxLength - 1)] + "…";
+
+    private static string FormatPercent(double percent) =>
+        percent.ToString("0.#", EsCulture) + "%";
+
+    private static bool HasTaskChartData(DashboardReadResponse data) =>
+        data.MyAssignedTasks.Count > 0;
+
+    private static bool HasBugChartData(DashboardReadResponse data) =>
+        data.MyAssignedBugs.Count > 0;
+
+    private static List<ChartLegendSlice> GetTaskChartLegend(DashboardReadResponse data) =>
+        data.MyAssignedTasks
+            .GroupBy(t => new { t.StatusName, t.StatusBadgeColor })
+            .OrderByDescending(g => g.Count())
+            .Select(g => new ChartLegendSlice(
+                g.Key.StatusName,
+                MapBadgeColorToChart(g.Key.StatusBadgeColor),
+                g.Count()))
+            .ToList();
+
+    private static List<ChartLegendSlice> GetBugChartLegend(DashboardReadResponse data) =>
+        data.MyAssignedBugs
+            .GroupBy(b => new { b.StatusName, b.StatusBadgeColor })
+            .OrderByDescending(g => g.Count())
+            .Select(g => new ChartLegendSlice(
+                g.Key.StatusName,
+                MapBadgeColorToChart(g.Key.StatusBadgeColor),
+                g.Count()))
+            .ToList();
+
+    private static object BuildStatusChartPayload(IReadOnlyList<ChartLegendSlice> slices) => new
+    {
+        labels = slices.Select(s => s.Label).ToArray(),
+        values = slices.Select(s => s.Value).ToArray(),
+        colors = slices.Select(s => s.Color).ToArray()
+    };
+
+    private static string MapBadgeColorToChart(string badgeColor) => badgeColor.ToLowerInvariant() switch
+    {
+        "green" => "#22c55e",
+        "blue" => "#3b82f6",
+        "amber" => "#f59e0b",
+        "red" => "#ef4444",
+        "violet" => "#8b5cf6",
+        "purple" => "#a855f7",
+        "orange" => "#f97316",
+        "emerald" => "#10b981",
+        _ => "#9ca3af"
+    };
+
+    private sealed record ChartLegendSlice(string Label, string Color, double Value, double Percent = 0, string? FullLabel = null);
+
+
+
+    private static string FormatTimeOffRange(DashboardTimeOffBannerItem item) =>
+
+        item.StartDate.Date == item.EndDate.Date
+
+            ? item.StartDate.ToString("dd/MM/yyyy")
+
+            : $"{item.StartDate:dd/MM/yyyy}  {item.EndDate:dd/MM/yyyy}";
+
+
+
+    private static string GetTimeOffBadgeClass(short type) =>
+
+        StatusBadgeHelper.TableBadgeBase + "font-semibold " + type switch
+
+        {
+
+            1 => "bg-blue-100 text-blue-800",
+
+            2 => "bg-amber-100 text-amber-800",
+
+            _ => "bg-gray-100 text-gray-800"
+
+        };
+
+
+
+    public void Dispose()
+    {
+        refreshTimer?.Dispose();
+        _ = JSRuntime.InvokeVoidAsync("disposeDashboardStatusChart");
+    }
+
+}
+
+

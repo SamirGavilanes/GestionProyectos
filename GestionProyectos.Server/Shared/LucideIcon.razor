@@ -1,0 +1,8 @@
+<span class="inline-flex shrink-0 items-center justify-center" aria-hidden="true">
+    <i data-lucide="@Name" class="@CssClass"></i>
+</span>
+
+@code {
+    [Parameter] public string Name { get; set; } = "circle";
+    [Parameter] public string CssClass { get; set; } = "h-5 w-5";
+}

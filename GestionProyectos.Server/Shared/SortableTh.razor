@@ -1,0 +1,17 @@
+<th class="@($"{Tw.ThSortable} {CssClass}".Trim())" @onclick="OnClick">
+    @ChildContent @((MarkupString)State.SortIcon(Column))
+</th>
+
+@code {
+    [Parameter] public string Column { get; set; } = "";
+    [Parameter] public PagedTableState State { get; set; } = new();
+    [Parameter] public EventCallback OnSorted { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private async Task OnClick()
+    {
+        State.SortBy(Column);
+        await OnSorted.InvokeAsync();
+    }
+}

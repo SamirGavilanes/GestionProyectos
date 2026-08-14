@@ -1,0 +1,255 @@
+@page "/bloqueos-externos"
+@inject IJSRuntime JSRuntime
+@inject ITaskBlockReportEngine blockReportEngine
+@inject ICatalogEngine catalogEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature
+@using GestionProyectos.Engine.Feature.Task
+@using GestionProyectos.Engine.Feature.Task.BlockReport
+@using GestionProyectos.Engine.Feature.Task.BlockReport.Request
+@using GestionProyectos.Engine.Feature.Task.BlockReport.Response
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+@using TaskStatusEntity = GestionProyectos.Data.Entities.TaskManagement.TaskStatus
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="@AppRoutes.BloqueosExternos">
+        <PageHeader Title="Bloqueos externos"
+                    Subtitle="Tareas bloqueadas por clientes o terceros. El motivo se captura al cambiar el estado en Tareas.">
+            <Actions>
+                <input type="text" class="@Tw.FilterInput" @bind-value="searchInput" placeholder="Buscar..." @bind-value:event="oninput" />
+                <TableRefreshButton OnClick="Load" />
+            </Actions>
+        </PageHeader>
+
+        <div class="@Tw.TableWrapContained">
+            <table class="@Tw.Table">
+                <colgroup>
+                    <col class="w-14" />
+                    <col />
+                    <col />
+                    <col />
+                    <col class="w-40" />
+                    <col class="w-28" />
+                </colgroup>
+                <thead>
+                    <tr>
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyView">Id</SortableTh>
+                        <SortableTh Column="Requirement" State="tableState" OnSorted="ApplyView">Requerimiento</SortableTh>
+                        <SortableTh Column="Task" State="tableState" OnSorted="ApplyView">Tarea</SortableTh>
+                        <SortableTh Column="Reason" State="tableState" OnSorted="ApplyView">Motivo</SortableTh>
+                        <SortableTh Column="Status" State="tableState" OnSorted="ApplyView">Estado</SortableTh>
+                        <th class="@Tw.ThActionsAuto"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (displayItems.Count == 0)
+                    {
+                        <tr><td colspan="6" class="@Tw.Td text-center text-gray-400">No hay bloqueos externos</td></tr>
+                    }
+                    @foreach (var item in displayItems)
+                    {
+                        <tr class="hover:bg-gray-50">
+                            <td class="@Tw.Td w-14">@item.TaskId</td>
+                            @if (editingId == item.TaskId && perms.CanEdit)
+                            {
+                                <td class="@Tw.TdText" title="@($"#{item.RequirementId} · {item.RequirementDescription}")">
+                                    #@item.RequirementId · @item.RequirementDescription
+                                </td>
+                                <td class="@Tw.TdText" title="@item.TaskDescription">@item.TaskDescription</td>
+                                <td class="@Tw.TdEdit">
+                                    <input type="text" class="@Tw.TableInput" @bind="editReason" placeholder="Motivo del bloqueo" />
+                                </td>
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" @bind="editStatusId">
+                                        @foreach (var status in GetSelectableStatuses())
+                                        {
+                                            <option value="@status.Id">@status.Description</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="() => Save(item)">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                    </div>
+                                </td>
+                            }
+                            else
+                            {
+                                <td class="@Tw.TdText" title="@($"#{item.RequirementId} · {item.RequirementDescription}")">
+                                    #@item.RequirementId · @item.RequirementDescription
+                                </td>
+                                <td class="@Tw.TdText" title="@item.TaskDescription">
+                                    <RecordLink Href="@AppRoutes.TaskDetail(item.TaskId)" Title="@item.TaskDescription">
+                                        @item.TaskDescription
+                                    </RecordLink>
+                                </td>
+                                <td class="@Tw.TdText" title="@item.Reason">@(string.IsNullOrWhiteSpace(item.Reason) ? "—" : item.Reason)</td>
+                                <td class="@Tw.Td">
+                                    <StatusBadge Compact="true" Label="@item.Status" Color="@item.StatusBadgeColor" />
+                                </td>
+                                <td class="@Tw.TdActionsAuto">
+                                    @if (perms.CanEdit)
+                                    {
+                                        <TableRowActionsMenu>
+                                            <TableRowAction Label="Editar" OnClick="@(() => StartEdit(item))" />
+                                        </TableRowActionsMenu>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <TablePagination State="tableState" ItemLabel="bloqueos" OnPageChanged="ApplyView" />
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private List<TaskBlockReportItem> allItems = new();
+    private List<TaskBlockReportItem> displayItems = new();
+    private List<TaskStatusEntity> taskStatuses = new();
+    private readonly PagedTableState tableState = new();
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.None;
+    private long editingId;
+    private long editStatusId;
+    private string editReason = string.Empty;
+    private string? searchText;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, AppRoutes.BloqueosExternos);
+        taskStatuses = catalogEngine.GetTaskStatuses().Data ?? new();
+        Load();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private void Load()
+    {
+        var response = blockReportEngine.GetExternalBlocks(new TaskBlockReportListRequest { Context = context });
+        if (!response.Success)
+        {
+            JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            allItems = new();
+        }
+        else
+        {
+            allItems = response.Data?.Items ?? new();
+        }
+
+        tableState.ResetPage();
+        ApplyView();
+    }
+
+    private void ApplyView()
+    {
+        IEnumerable<TaskBlockReportItem> query = allItems;
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText.ToLower();
+            query = query.Where(x => TableSearch.Matches(s,
+                x.TaskId.ToString(),
+                x.RequirementId.ToString(),
+                x.RequirementDescription,
+                x.TaskDescription,
+                x.Status,
+                x.Reason));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Requirement" => tableState.SortAscending
+                ? query.OrderBy(x => x.RequirementDescription)
+                : query.OrderByDescending(x => x.RequirementDescription),
+            "Task" => tableState.SortAscending
+                ? query.OrderBy(x => x.TaskDescription)
+                : query.OrderByDescending(x => x.TaskDescription),
+            "Status" => tableState.SortAscending
+                ? query.OrderBy(x => x.Status)
+                : query.OrderByDescending(x => x.Status),
+            "Reason" => tableState.SortAscending
+                ? query.OrderBy(x => x.Reason)
+                : query.OrderByDescending(x => x.Reason),
+            _ => tableState.SortAscending
+                ? query.OrderBy(x => x.TaskId)
+                : query.OrderByDescending(x => x.TaskId)
+        };
+
+        var list = query.ToList();
+        tableState.SetPageCount(list.Count);
+        displayItems = tableState.Paginate(list).ToList();
+    }
+
+    private IEnumerable<TaskStatusEntity> GetSelectableStatuses()
+    {
+        foreach (var item in taskStatuses)
+        {
+            if (!perms.CanFinalize &&
+                FinalizeStatusHelper.IsTaskFinalized(item.Description) &&
+                item.Id != editStatusId)
+                continue;
+
+            yield return item;
+        }
+    }
+
+    private void StartEdit(TaskBlockReportItem item)
+    {
+        if (!perms.CanEdit) return;
+        editingId = item.TaskId;
+        editStatusId = item.TaskStatusId;
+        editReason = item.Reason;
+    }
+
+    private void Cancel()
+    {
+        editingId = 0;
+        editStatusId = 0;
+        editReason = string.Empty;
+    }
+
+    private void Save(TaskBlockReportItem item)
+    {
+        var response = blockReportEngine.Update(new TaskBlockReportUpdateRequest
+        {
+            TaskId = item.TaskId,
+            TaskStatusId = editStatusId,
+            Reason = editReason,
+            Context = context
+        });
+        if (!response.Success)
+        {
+            JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        Cancel();
+        Load();
+    }
+
+    string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+}

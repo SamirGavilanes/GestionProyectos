@@ -1,0 +1,320 @@
+@page "/create-bug"
+@inject ICatalogEngine catalogEngine
+@inject ITaskBugEngine taskBugEngine
+@inject ISessionStorageService session
+@inject NavigationManager NavigationManager
+@inject IJSRuntime JSRuntime
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Catalog.Request
+@using GestionProyectos.Engine.Feature.Task.Bug
+@using GestionProyectos.Engine.Feature.Task.Bug.Request
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using GestionProyectos.Shared.Models.UploadFile
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        @if (!allowed)
+        {
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                No tiene permiso para reportar bugs.
+            </div>
+        }
+        else
+        {
+            <h1 class="@Tw.PageTitle mb-2">Registrar bugs</h1>
+            <p class="mb-4 text-xs text-gray-500">Los bugs se registran sobre el requerimiento. Otro usuario los asignará a una tarea.</p>
+
+            <div class="@Tw.FormCard">
+                @if (!string.IsNullOrWhiteSpace(formError))
+                {
+                    <div class="rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">@formError</div>
+                }
+
+                <div class="@Tw.FormGridSm">
+                    <div>
+                        <label class="@Tw.FormLabel">Empresa</label>
+                        <select class="@Tw.FormSelect" value="@enterpriseId" @onchange="OnEnterpriseChange">
+                            <option value="0">-- Seleccione --</option>
+                            @foreach (var item in enterprises)
+                            {
+                                <option value="@item.Id">@item.Description</option>
+                            }
+                        </select>
+                    </div>
+                    <div>
+                        <label class="@Tw.FormLabel">Cliente</label>
+                        <select class="@Tw.FormSelect" value="@customerId" @onchange="OnCustomerChange" disabled="@(enterpriseId == 0)">
+                            <option value="0">-- Seleccione --</option>
+                            @foreach (var item in customers)
+                            {
+                                <option value="@item.Id">@item.Description</option>
+                            }
+                        </select>
+                    </div>
+                    <div>
+                        <label class="@Tw.FormLabel">Proyecto</label>
+                        <select class="@Tw.FormSelect" value="@projectId" @onchange="OnProjectChange" disabled="@(customerId == 0)">
+                            <option value="0">-- Seleccione --</option>
+                            @foreach (var item in projects)
+                            {
+                                <option value="@item.Id">@item.Description</option>
+                            }
+                        </select>
+                    </div>
+                    <div>
+                        <label class="@Tw.FormLabel">Requerimiento</label>
+                        <select class="@FieldClass(requirementError)" @bind="requirementId" disabled="@(projectId == 0)">
+                            <option value="0">-- Seleccione --</option>
+                            @foreach (var ticket in requirements)
+                            {
+                                <option value="@ticket.Id">@ticket.Id - @ticket.Description</option>
+                            }
+                        </select>
+                        <FormFieldError Message="@requirementError" />
+                    </div>
+                </div>
+
+                <div class="space-y-3">
+                    <label class="@Tw.FormLabel">Bugs</label>
+                    @for (var i = 0; i < bugRows.Count; i++)
+                    {
+                        var index = i;
+                        var row = bugRows[index];
+                        <div class="flex items-start gap-2">
+                            <div class="flex-1 space-y-1">
+                                <textarea class="@Tw.FormInput min-h-[72px]"
+                                          @bind="row.Description"
+                                          placeholder="Describa el bug encontrado"></textarea>
+                                @if (row.Files.Count > 0)
+                                {
+                                    <ul class="space-y-1 text-xs text-gray-700">
+                                        @foreach (var file in row.Files)
+                                        {
+                                            <li class="flex items-center gap-2">
+                                                <span class="truncate">@file.Name</span>
+                                                <button type="button" class="@Tw.TableBtn shrink-0" @onclick="() => RemoveBugFile(index, file)">Quitar</button>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                            <label @key="@($"bug-file-{index}")" class="@($"{Tw.BtnOutline} shrink-0 cursor-pointer text-xs")" title="Adjuntar capturas (máx. 512 KB c/u)">
+                                Añadir archivo
+                                <InputFile OnChange="e => HandleBugFileChanged(index, e)" multiple accept="image/*" class="sr-only" />
+                            </label>
+                            @if (bugRows.Count > 1)
+                            {
+                                <button type="button"
+                                        class="@Tw.BtnOutline shrink-0 text-xs text-red-800 hover:border-red-300 hover:bg-red-50"
+                                        title="Quitar bug"
+                                        @onclick="() => RemoveBugRow(index)">
+                                    Quitar
+                                </button>
+                            }
+                        </div>
+                    }
+                    <button type="button" class="@Tw.BtnOutline" @onclick="AddBugRow">
+                        <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Añadir bug
+                    </button>
+                </div>
+
+                <div class="flex gap-2 pt-1">
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="Confirm" disabled="@saving">Confirmar</button>
+                    <button type="button" class="@Tw.BtnOutline" @onclick="Cancel">Cancelar</button>
+                </div>
+            </div>
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private List<Enterprise> enterprises = new();
+    private List<Customer> allCustomers = new();
+    private List<Project> allProjects = new();
+    private List<Customer> customers = new();
+    private List<Project> projects = new();
+    private List<Requirement> requirements = new();
+    private List<BugRow> bugRows = new() { new() };
+
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private bool allowed;
+    private bool saving;
+
+    private long enterpriseId;
+    private long customerId;
+    private long projectId;
+    private long requirementId;
+
+    private string? formError;
+    private string? requirementError;
+
+    private static string FieldClass(string? error) =>
+        string.IsNullOrWhiteSpace(error) ? Tw.FormSelect : Tw.FormInputError;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/task-bug-list");
+        allowed = perms.CanView && perms.CanCreate;
+
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        allCustomers = catalogEngine.GetCustomers().Data ?? new();
+        allProjects = catalogEngine.GetProjects().Data ?? new();
+    }
+
+    private void OnEnterpriseChange(ChangeEventArgs e)
+    {
+        enterpriseId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        customerId = projectId = requirementId = 0;
+        RefreshCustomers();
+        projects = new();
+        requirements = new();
+    }
+
+    private void OnCustomerChange(ChangeEventArgs e)
+    {
+        customerId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        projectId = requirementId = 0;
+        RefreshProjects();
+        requirements = new();
+    }
+
+    private void OnProjectChange(ChangeEventArgs e)
+    {
+        projectId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        requirementId = 0;
+        RefreshRequirements();
+    }
+
+    private void RefreshCustomers() =>
+        customers = enterpriseId > 0
+            ? allCustomers.Where(c => c.EnterpriseId == enterpriseId).ToList()
+            : new();
+
+    private void RefreshProjects() =>
+        projects = customerId > 0
+            ? allProjects.Where(p => p.CustomerId == customerId).ToList()
+            : new();
+
+    private void RefreshRequirements() =>
+        requirements = projectId > 0
+            ? (catalogEngine.GetTickets(new GetTicketRequest { ProjectId = projectId }).Data ?? new())
+                .OrderByDescending(t => t.Id)
+                .ToList()
+            : new();
+
+    private void AddBugRow() => bugRows.Add(new BugRow());
+
+    private void RemoveBugRow(int index)
+    {
+        if (bugRows.Count <= 1) return;
+        bugRows.RemoveAt(index);
+    }
+
+    private bool ValidateForm()
+    {
+        formError = requirementError = null;
+
+        if (requirementId <= 0)
+        {
+            requirementError = "Seleccione un requerimiento.";
+            return false;
+        }
+
+        if (!bugRows.Any(r => !string.IsNullOrWhiteSpace(r.Description)))
+        {
+            formError = "Ingrese al menos una descripción de bug.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private void Confirm()
+    {
+        if (!ValidateForm()) return;
+
+        saving = true;
+        var rowsToSave = bugRows
+            .Where(r => !string.IsNullOrWhiteSpace(r.Description))
+            .ToList();
+
+        var failed = 0;
+        string? lastError = null;
+
+        foreach (var row in rowsToSave)
+        {
+            var response = taskBugEngine.SaveBug(new TaskBugSaveRequest
+            {
+                RequirementId = requirementId,
+                TaskId = null,
+                Description = row.Description.Trim(),
+                TaskBugStatusId = 0,
+                Files = BuildBugFiles(row),
+                Context = context
+            });
+
+            if (!response.Success)
+            {
+                failed++;
+                lastError = response.Message?.Description ?? "No se pudo registrar el bug.";
+            }
+        }
+
+        saving = false;
+
+        if (failed > 0)
+        {
+            var created = rowsToSave.Count - failed;
+            formError = created > 0
+                ? $"Se crearon {created} bug(s), pero {failed} no se pudieron registrar. {lastError}"
+                : lastError;
+            return;
+        }
+
+        NavigationManager.NavigateTo("/task-bug-list");
+    }
+
+    private void Cancel() => NavigationManager.NavigateTo("/task-bug-list");
+
+    private void HandleBugFileChanged(int index, InputFileChangeEventArgs e)
+    {
+        if (index < 0 || index >= bugRows.Count) return;
+
+        foreach (var file in e.GetMultipleFiles())
+        {
+            if (file.Size <= 512000)
+                bugRows[index].Files.Add(file);
+            else
+                JSRuntime.InvokeVoidAsync("alert", "El archivo supera 512 KB.");
+        }
+    }
+
+    private void RemoveBugFile(int index, IBrowserFile file)
+    {
+        if (index < 0 || index >= bugRows.Count) return;
+        bugRows[index].Files.Remove(file);
+    }
+
+    private static List<FileItem> BuildBugFiles(BugRow row) =>
+        row.Files.Select(file => new FileItem
+        {
+            Name = file.Name,
+            File = file.OpenReadStream(maxAllowedSize: 512000)
+        }).ToList();
+
+    private sealed class BugRow
+    {
+        public string Description { get; set; } = string.Empty;
+        public List<IBrowserFile> Files { get; set; } = new();
+    }
+}

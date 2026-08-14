@@ -1,0 +1,40 @@
+﻿@inject IJSRuntime JSRuntime
+
+<button type="button"
+        class="@GetClass()"
+        title="@(Visible ? "Ocultar filtros" : "Mostrar filtros")"
+        aria-label="@ToggleLabel"
+        @onclick="Toggle">
+    <LucideIcon Name="sliders-horizontal" CssClass="h-3.5 w-3.5 shrink-0" />
+    @if (ActiveCount > 0)
+    {
+        <span class="inline-flex min-w-[1.125rem] items-center justify-center rounded-full bg-primary-600 px-1 py-0.5 text-xs font-bold leading-none text-white">
+            @ActiveCount
+        </span>
+    }
+</button>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public int ActiveCount { get; set; }
+
+    private string ToggleLabel =>
+        ActiveCount > 0
+            ? $"{(Visible ? "Ocultar" : "Mostrar")} filtros ({ActiveCount} activos)"
+            : $"{(Visible ? "Ocultar" : "Mostrar")} filtros";
+
+    private async System.Threading.Tasks.Task Toggle() =>
+        await VisibleChanged.InvokeAsync(!Visible);
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    private string GetClass() =>
+        "inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition " +
+        (Visible
+            ? "border-primary-300 bg-primary-50 text-primary-800"
+            : "border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50");
+}

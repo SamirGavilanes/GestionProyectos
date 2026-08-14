@@ -1,0 +1,46 @@
+<div class="@Tw.PageHeader">
+    <div class="@Tw.PageHeaderTop">
+        <h1 class="@Tw.PageHeaderTitle">@Title</h1>
+        @if (Actions != null || ShowFacetsToggle)
+        {
+            <div class="@Tw.PageHeaderActions">
+                @Actions
+                @if (ShowFacetsToggle)
+                {
+                    <FacetsToggleButton Visible="FacetsVisible"
+                                        VisibleChanged="FacetsVisibleChanged"
+                                        ActiveCount="ActiveFilterCount" />
+                }
+            </div>
+        }
+        @if (!string.IsNullOrWhiteSpace(Subtitle))
+        {
+            <p class="@Tw.PageHeaderSubtitle">@Subtitle</p>
+        }
+    </div>
+    @if (FilterToolbar != null)
+    {
+        <div class="@Tw.PageHeaderFilters">
+            <div class="@Tw.PageHeaderFilterToolbar ml-auto">@FilterToolbar</div>
+        </div>
+    }
+</div>
+
+@if (ChildContent != null)
+{
+    @ChildContent
+}
+
+@code {
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+    [Parameter] public RenderFragment? Filters { get; set; }
+    [Parameter] public RenderFragment? FilterToolbar { get; set; }
+    [Parameter] public bool StackedFilters { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public bool ShowFacetsToggle { get; set; }
+    [Parameter] public bool FacetsVisible { get; set; }
+    [Parameter] public EventCallback<bool> FacetsVisibleChanged { get; set; }
+    [Parameter] public int ActiveFilterCount { get; set; }
+}

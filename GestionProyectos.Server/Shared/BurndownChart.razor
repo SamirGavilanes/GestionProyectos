@@ -1,0 +1,55 @@
+@inject IJSRuntime JSRuntime
+
+@using GestionProyectos.Engine.Feature.Project.Burndown.Response
+
+@implements IAsyncDisposable
+
+<div class="@ContainerClass">
+    @if (Data?.Points == null || Data.Points.Count == 0)
+    {
+        <p class="flex h-full items-center justify-center text-xs text-gray-500">Sin datos para el gráfico burndown.</p>
+    }
+    else
+    {
+        <canvas @ref="canvasRef"></canvas>
+    }
+</div>
+
+@code {
+    [Parameter] public ProjectBurndownResponse? Data { get; set; }
+    [Parameter] public string ContainerClass { get; set; } = "h-96 w-full";
+
+    private ElementReference canvasRef;
+    private bool pendingRender;
+    private int renderedVersion = -1;
+    private int dataVersion;
+
+    protected override void OnParametersSet()
+    {
+        dataVersion++;
+        pendingRender = true;
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!pendingRender || Data?.Points == null || Data.Points.Count == 0)
+            return;
+
+        if (renderedVersion == dataVersion)
+            return;
+
+        pendingRender = false;
+        renderedVersion = dataVersion;
+        await JSRuntime.InvokeVoidAsync("renderBurndownChart", canvasRef, new
+        {
+            labels = Data.Points.Select(p => p.Label).ToArray(),
+            estimated = Data.Points.Select(p => (double)p.Estimated).ToArray(),
+            actual = Data.Points.Select(p => (double)p.Actual).ToArray(),
+            optimal = Data.Points.Select(p => (double)p.Optimal).ToArray(),
+            problemLimit = Data.Points.Select(p => (double)p.ProblemLimit).ToArray()
+        });
+    }
+
+    public async ValueTask DisposeAsync() =>
+        await JSRuntime.InvokeVoidAsync("disposeBurndownChart");
+}

@@ -1,0 +1,626 @@
+@page "/requirement-list"
+@inject IJSRuntime JSRuntime
+@inject IRequirementReadEngine ticketReadEngine
+@inject IRequirementDeletionEngine ticketDeletionEngine
+@inject IRequirementUpdateEngine ticketUpdateEngine
+@inject ICustomerReadEngine customerReadEngine
+@inject IProjectReadEngine projectReadEngine
+@inject ICatalogEngine catalogEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature.Customer.Read
+@using GestionProyectos.Engine.Feature.Customer.Read.Request
+@using GestionProyectos.Engine.Feature.Project.Read
+@using GestionProyectos.Engine.Feature.Project.Read.Request
+@using GestionProyectos.Engine.Feature.Requirement.Delete
+@using GestionProyectos.Engine.Feature.Requirement.Delete.Request
+@using GestionProyectos.Engine.Feature.Requirement.Update
+@using GestionProyectos.Engine.Feature.Requirement.Update.Request
+@using GestionProyectos.Engine.Feature.Requirement.Read
+@using GestionProyectos.Engine.Feature.Requirement.Read.CommonObject
+@using GestionProyectos.Engine.Feature.Requirement.Read.Request
+@using GestionProyectos.Engine.Feature
+@using GestionProyectos.Server.Extensions
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Shared.Enums
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+@implements IDisposable
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/requirement-list">
+        <PageHeader Title="Requerimientos" Subtitle="Consulta y gestión de requerimientos por proyecto."
+                    ShowFacetsToggle="true"
+                    FacetsVisible="showFacets"
+                    FacetsVisibleChanged="@(v => showFacets = v)"
+                    ActiveFilterCount="@GetActiveFilterCount()">
+            <Actions>
+                <ListPageToolbar ShowSearch="true"
+                                 SearchValue="@searchInput"
+                                 SearchValueChanged="@(v => searchInput = v)"
+                                 ShowViewMode="true"
+                                 ViewMode="@viewMode"
+                                 ViewModeChanged="OnViewModeChanged"
+                                 OnRefresh="RefreshTable">
+                    <LeadingContent>
+                        @if (perms.CanCreate)
+                        {
+                            <button type="button" class="@Tw.BtnPrimary" @onclick="NewRequirement" title="Nuevo requerimiento">
+                                <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                            </button>
+                        }
+                    </LeadingContent>
+                </ListPageToolbar>
+            </Actions>
+        </PageHeader>
+
+        <FilteredPageLayout FacetsVisible="showFacets"
+                            FacetsVisibleChanged="@(v => showFacets = v)"
+                            ActiveFilterCount="@GetActiveFilterCount()"
+                            OnClearFacets="ClearFilters">
+            <Facets>
+                <FacetSection Title="Empresa">
+                    <FacetCheckboxList Options="enterpriseOptions"
+                                       MultiSelect="false"
+                                       SelectedId="enterpriseValue"
+                                       SelectedIdChanged="HandleEnterpriseChange" />
+                </FacetSection>
+                <FacetSection Title="Cliente">
+                    <FacetCheckboxList Options="customerOptions"
+                                       MultiSelect="false"
+                                       SelectedId="customerValue"
+                                       SelectedIdChanged="HandleCustomerChange" />
+                </FacetSection>
+                <FacetSection Title="Proyecto">
+                    <FacetCheckboxList Options="projectOptions"
+                                       MultiSelect="false"
+                                       SelectedId="projectValue"
+                                       SelectedIdChanged="HandleProjectChange" />
+                </FacetSection>
+                <FacetSection Title="Estado">
+                    <FacetCheckboxList Options="statusOptions"
+                                       SelectedIds="statusIds"
+                                       SelectedIdsChanged="HandleStatusChange" />
+                </FacetSection>
+            </Facets>
+            <ChildContent>
+        @if (viewMode == ViewList)
+        {
+        <div class="@Tw.TableWrapContained">
+            <table class="@Tw.Table">
+                <colgroup>
+                    <col class="w-14" />
+                    <col class="w-28" />
+                    <col />
+                    <col />
+                    <col class="w-36" />
+                    <col class="w-36" />
+                    <col class="w-28" />
+                    <col class="w-28" />
+                    <col class="w-8" />
+                </colgroup>
+                <thead>
+                    <tr>
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyView">Id</SortableTh>
+                        <SortableTh Column="FreshDesk" State="tableState" OnSorted="ApplyView">Numero Ticket (Freshdesk)</SortableTh>
+                        <SortableTh Column="Project" State="tableState" OnSorted="ApplyView">Proyecto</SortableTh>
+                        <SortableTh Column="Description" State="tableState" OnSorted="ApplyView">Descripción</SortableTh>
+                        <SortableTh Column="InitialScope" State="tableState" OnSorted="ApplyView">Alcance inicial</SortableTh>
+                        <SortableTh Column="RequirementType" State="tableState" OnSorted="ApplyView">Tipo</SortableTh>
+                        <SortableTh Column="Priority" State="tableState" OnSorted="ApplyView">Prioridad</SortableTh>
+                        <SortableTh Column="Status" State="tableState" OnSorted="ApplyView">Estado</SortableTh>
+                        <th class="@Tw.ThActionsAuto"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (displayTickets.Count == 0)
+                    {
+                        <tr><td colspan="9" class="@Tw.Td text-center text-gray-400">No hay registros</td></tr>
+                    }
+                    @foreach (var t in displayTickets)
+                    {
+                        <tr class="hover:bg-gray-50">
+                            <td class="@Tw.Td w-14">@t.Id</td>
+                            <td class="@Tw.TdText">@(string.IsNullOrWhiteSpace(t.FreshDeskTicketNumber) ? "—" : t.FreshDeskTicketNumber)</td>
+                            <td class="@Tw.TdText">
+                                <RecordLink Href="@AppRoutes.ProjectDetail(t.ProjectId)" Title="@t.Project">
+                                    @t.Project
+                                </RecordLink>
+                            </td>
+                            <td class="@Tw.TdText max-w-xs">
+                                <button type="button"
+                                        class="block max-w-full truncate text-left text-primary-700 hover:underline"
+                                        title="@t.Description"
+                                        @onclick="() => ViewRequirement(t)">
+                                    @TruncateText(t.Description)
+                                </button>
+                            </td>
+                            <td class="@Tw.Td">
+                                <span class="@GetInitialScopeBadgeClass(t)" title="@GetInitialScopeLabel(t)">@GetInitialScopeLabel(t)</span>
+                            </td>
+                            <td class="@Tw.Td">
+                                <span class="@GetRequirementTypeBadgeClass(t.IsProductionReprocess)">@GetRequirementTypeLabel(t.IsProductionReprocess)</span>
+                            </td>
+                            <td class="@Tw.Td">
+                                <StatusBadge Compact="true" Label="@t.Priority" Color="@t.PriorityBadgeColor" />
+                            </td>
+                            <td class="@Tw.Td">
+                                <StatusBadge Compact="true" Label="@t.RequirementStatus" Color="@t.RequirementStatusBadgeColor" />
+                            </td>
+                            <td class="@Tw.TdActionsAuto">
+                                <TableRowActionsMenu>
+                                    <TableRowAction Label="Ver análisis" OnClick="@(() => GoToAnalysis(t))" />
+                                    @if (perms.CanEdit)
+                                    {
+                                        <TableRowAction Label="Editar" OnClick="@(() => EditTask(t))" />
+                                    }
+                                    @if (perms.CanDelete)
+                                    {
+                                        <TableRowAction Label="Eliminar" Danger OnClick="@(() => DeleteTask(t))" />
+                                    }
+                                </TableRowActionsMenu>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyView" />
+        }
+        else
+        {
+            <KanbanBoard TItem="Requirement"
+                         Columns="kanbanColumns"
+                         Items="filteredTickets"
+                         StatusIdSelector="t => t.RequirementStatusId"
+                         EnableDrag="perms.CanEdit"
+                         OnMove="OnRequirementMoved">
+                <CardTemplate Context="t">
+                    <p class="@Tw.KanbanCardTitle">@t.Description</p>
+                    <div class="@Tw.KanbanCardMeta">#@t.Id · <RecordLink Href="@AppRoutes.ProjectDetail(t.ProjectId)" Title="@t.Project" CssClass="inline font-medium text-primary-700 hover:underline">@t.Project</RecordLink></div>
+                    <div class="mt-1 flex flex-wrap items-center gap-1">
+                        <StatusBadge Compact="true" Label="@t.Priority" Color="@t.PriorityBadgeColor" />
+                        <StatusBadge Compact="true" Label="@t.RequirementStatus" Color="@t.RequirementStatusBadgeColor" />
+                    </div>
+                    <p class="@Tw.KanbanCardMeta">@FormatStartDate(t) · @FormatEndDate(t)</p>
+                    <div class="mt-2 flex flex-wrap gap-1">
+                        <button type="button" class="@Tw.TableBtn" @onclick="() => GoToAnalysis(t)">Ver análisis</button>
+                        @if (perms.CanEdit)
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => EditTask(t)">Editar</button>
+                        }
+                        @if (perms.CanDelete)
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => DeleteTask(t)">Eliminar</button>
+                        }
+                    </div>
+                </CardTemplate>
+            </KanbanBoard>
+        }
+            </ChildContent>
+        </FilteredPageLayout>
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private const string ViewList = "list";
+    private const string ViewKanban = "kanban";
+
+    private string viewMode = ViewList;
+    private List<KanbanColumn> kanbanColumns = new();
+    private Context context = new();
+    private List<GestionProyectos.Data.Entities.TaskManagement.Enterprise> enterprises = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> allCustomers = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> customers = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> projects = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> allProjects = new();
+    private List<GestionProyectos.Data.Entities.TaskManagement.RequirementStatus> requirementStatuses = new();
+    private List<Requirement> ticketList = new();
+    private List<Requirement> allItems = new();
+    private List<Requirement> filteredTickets = new();
+    private List<Requirement> displayTickets = new();
+    private List<FacetOption> enterpriseOptions = new();
+    private List<FacetOption> customerOptions = new();
+    private List<FacetOption> projectOptions = new();
+    private List<FacetOption> statusOptions = new();
+    private Dictionary<long, long> customerEnterpriseMap = new();
+    private Dictionary<long, long> projectCustomerMap = new();
+    private readonly PagedTableState tableState = new();
+    private long enterpriseValue, customerValue, projectValue;
+    private HashSet<long> statusIds = new();
+    private string? searchText;
+    private PagePermissions perms = PagePermissions.Full;
+    private bool showFacets = false;
+    [Inject] private NavigationManager NavigationManager { get; set; } = default!;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        NavigationManager.LocationChanged += OnLocationChanged;
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/requirement-list");
+        enterprises = catalogEngine.GetEnterprises().Data?.ToList() ?? new();
+        allCustomers = customerReadEngine.GetCustomers().Data?.Customers?.ToList() ?? new();
+        customers = allCustomers.ToList();
+        requirementStatuses = catalogEngine.GetRequirementStatuses().Data?.ToList() ?? new();
+        kanbanColumns = requirementStatuses
+            .Select(s => new KanbanColumn { Id = s.Id, Title = s.Description, BadgeColor = s.BadgeColor }).ToList();
+        customerEnterpriseMap = allCustomers.ToDictionary(
+            c => c.Id,
+            c => enterprises.FirstOrDefault(e => string.Equals(e.Description, c.Enterprise, StringComparison.OrdinalIgnoreCase))?.Id ?? 0);
+        var projectsResponse = projectReadEngine.GetProjects(new ProjectReadRequest());
+        allProjects = projectsResponse.Success ? projectsResponse.Data?.Projects?.ToList() ?? new() : new();
+        projectCustomerMap = allProjects.ToDictionary(p => p.Id, p => p.CustomerId);
+        LoadAllItemsForFacets();
+        GetTickets();
+    }
+
+    public void Dispose() => NavigationManager.LocationChanged -= OnLocationChanged;
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        if (IsRequirementListRoute(e.Location))
+            _ = InvokeAsync(LoadTickets);
+    }
+
+    private bool IsRequirementListRoute(string uri) =>
+        NavigationManager.ToBaseRelativePath(uri).TrimStart('/').Equals("requirement-list", StringComparison.OrdinalIgnoreCase);
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private static string GetCustomerOptionLabel(GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer customer) =>
+        string.IsNullOrWhiteSpace(customer.Enterprise)
+            ? customer.Description
+            : $"{customer.Description} · {customer.Enterprise}";
+
+    private static string FormatPlannedActual(DateTime? planned, DateTime? actual)
+    {
+        var plannedText = planned?.ToString("dd-MM-yyyy") ?? "—";
+        var actualText = actual?.ToString("dd-MM-yyyy") ?? "—";
+        return $"{plannedText} ({actualText})";
+    }
+
+    private static string FormatStartDate(Requirement t) =>
+        FormatPlannedActual(t.StartDate, t.RequestDate);
+
+    private static string FormatEndDate(Requirement t) =>
+        FormatPlannedActual(t.EndDate, t.ActualEndDate);
+
+    private static string TruncateText(string? text, int maxLength = 80)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "—";
+        var trimmed = text.Trim();
+        return trimmed.Length <= maxLength ? trimmed : trimmed[..(maxLength - 1)] + "…";
+    }
+
+    private long GetRequirementEnterpriseId(Requirement requirement) =>
+        customerEnterpriseMap.GetValueOrDefault(projectCustomerMap.GetValueOrDefault(requirement.ProjectId));
+
+    private long GetRequirementCustomerId(Requirement requirement) =>
+        projectCustomerMap.GetValueOrDefault(requirement.ProjectId);
+
+    private void LoadAllItemsForFacets()
+    {
+        var response = ticketReadEngine.GetTicketsByEnterpriseProject(new RequirementReadRequest());
+        allItems = response.Success ? response.Data?.Tickets?.ToList() ?? new() : new();
+        RefreshFacetOptions();
+    }
+
+    private void RefreshFacetOptions()
+    {
+        var enterpriseCatalog = enterprises.Select(e => (e.Id, e.Description));
+        enterpriseOptions = enterpriseCatalog.ToFacetOptions(
+            allItems,
+            GetRequirementEnterpriseId,
+            MatchesRequirement(enterpriseId: 0),
+            enterpriseValue);
+
+        var customerCatalog = customers.Select(c => (c.Id, GetCustomerOptionLabel(c)));
+        customerOptions = customerCatalog.ToFacetOptions(
+            allItems,
+            GetRequirementCustomerId,
+            MatchesRequirement(customerId: 0),
+            customerValue);
+
+        var projectCatalog = (projects.Count > 0 ? projects : allProjects).Select(p => (p.Id, p.Description));
+        projectOptions = projectCatalog.ToFacetOptions(
+            allItems,
+            r => r.ProjectId,
+            MatchesRequirement(projectId: 0),
+            projectValue);
+
+        var statusCatalog = requirementStatuses.Select(s => (s.Id, s.Description));
+        statusOptions = statusCatalog.ToFacetOptions(
+            allItems,
+            r => r.RequirementStatusId,
+            MatchesRequirement(statusId: 0),
+            statusIds);
+    }
+
+    private Func<Requirement, bool> MatchesRequirement(
+        long enterpriseId = -1,
+        long customerId = -1,
+        long projectId = -1,
+        long statusId = -1)
+    {
+        var enterpriseFilter = enterpriseId == -1 ? enterpriseValue : enterpriseId;
+        var customerFilter = customerId == -1 ? customerValue : customerId;
+        var projectFilter = projectId == -1 ? projectValue : projectId;
+
+        return requirement =>
+            (enterpriseFilter == 0 || GetRequirementEnterpriseId(requirement) == enterpriseFilter)
+            && (customerFilter == 0 || GetRequirementCustomerId(requirement) == customerFilter)
+            && (projectFilter == 0 || requirement.ProjectId == projectFilter)
+            && (statusId == 0 || FacetFilter.Matches(requirement.RequirementStatusId, statusIds, requirementStatuses.Count));
+    }
+
+    private void HandleEnterpriseChange(long id)
+    {
+        enterpriseValue = id;
+        customerValue = 0;
+        projectValue = 0;
+        customers = enterpriseValue > 0
+            ? customerReadEngine.GetCustomersByEnterprise(new CustomerReadRequest { EnterpriseId = enterpriseValue }).Data?.Customers?.ToList() ?? new()
+            : allCustomers.ToList();
+        projects = new();
+        RefreshFacetOptions();
+        GetTickets();
+    }
+
+    private void HandleCustomerChange(long id)
+    {
+        customerValue = id;
+        projectValue = 0;
+        projects = customerValue > 0
+            ? projectReadEngine.GetProjectsByCustomer(new ProjectReadRequest { CustomerId = customerValue }).Data?.Projects?.ToList() ?? new()
+            : new();
+        RefreshFacetOptions();
+        GetTickets();
+    }
+
+    private void HandleProjectChange(long id)
+    {
+        projectValue = id;
+        RefreshFacetOptions();
+        GetTickets();
+    }
+
+    private void HandleStatusChange(IReadOnlySet<long> ids)
+    {
+        statusIds = new HashSet<long>(ids);
+        RefreshFacetOptions();
+        GetTickets();
+    }
+
+    private void OnViewModeChanged(string mode) => viewMode = mode;
+
+    private void RefreshTable()
+    {
+        LoadAllItemsForFacets();
+        GetTickets();
+    }
+
+    private void LoadTickets()
+    {
+        GetTickets();
+        StateHasChanged();
+    }
+
+    private void GetTickets()
+    {
+        var response = ticketReadEngine.GetTicketsByEnterpriseProject(new RequirementReadRequest
+        {
+            ProjectId = projectValue,
+            CustomerId = customerValue,
+            EnterpriseId = enterpriseValue,
+            RequirementStatusId = FacetFilter.ToApiSingleId(statusIds)
+        });
+
+        if (!response.Success)
+        {
+            JSRuntime.InvokeVoidAsync("alert", string.IsNullOrWhiteSpace(response.Message.Description)
+                ? "No se pudieron cargar los requerimientos."
+                : response.Message.Description);
+            ticketList = new();
+            filteredTickets = new();
+            displayTickets = new();
+            tableState.SetPageCount(0);
+            return;
+        }
+
+        ticketList = response.Data?.Tickets?.ToList() ?? new();
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    private void ApplyView()
+    {
+        IEnumerable<Requirement> query = ticketList;
+
+        if (FacetFilter.IsActive(statusIds, requirementStatuses.Count))
+            query = query.Where(r => statusIds.Contains(r.RequirementStatusId));
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText.ToLower();
+            query = query.Where(x => TableSearch.Matches(s,
+                x.Id.ToString(), x.Description, x.Project, x.Scope, x.Priority,
+                x.RequirementStatus, FormatStartDate(x), FormatEndDate(x),
+                x.RequesterName, x.ImpactedSystems, x.FreshDeskTicketNumber,
+                GetInitialScopeLabel(x), GetRequirementTypeLabel(x.IsProductionReprocess)));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "FreshDesk" => tableState.SortAscending
+                ? query.OrderBy(x => x.FreshDeskTicketNumber)
+                : query.OrderByDescending(x => x.FreshDeskTicketNumber),
+            "Project" => tableState.SortAscending ? query.OrderBy(x => x.Project) : query.OrderByDescending(x => x.Project),
+            "Description" => tableState.SortAscending ? query.OrderBy(x => x.Description) : query.OrderByDescending(x => x.Description),
+            "InitialScope" => tableState.SortAscending
+                ? query.OrderBy(x => x.IsWithinOriginalScope).ThenBy(x => x.ScopeChangeReason)
+                : query.OrderByDescending(x => x.IsWithinOriginalScope).ThenByDescending(x => x.ScopeChangeReason),
+            "RequirementType" => tableState.SortAscending
+                ? query.OrderBy(x => x.IsProductionReprocess)
+                : query.OrderByDescending(x => x.IsProductionReprocess),
+            "Priority" => tableState.SortAscending ? query.OrderBy(x => x.Priority) : query.OrderByDescending(x => x.Priority),
+            "Status" => tableState.SortAscending ? query.OrderBy(x => x.RequirementStatus) : query.OrderByDescending(x => x.RequirementStatus),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        filteredTickets = query.ToList();
+        tableState.SetPageCount(filteredTickets.Count);
+        displayTickets = tableState.Paginate(filteredTickets).ToList();
+    }
+
+    private void NewRequirement()
+    {
+        if (!perms.CanCreate) return;
+        NavigationManager.NavigateTo("/create-requirement/0");
+    }
+
+    private void EditTask(Requirement t)
+    {
+        if (!perms.CanEdit) return;
+        NavigationManager.NavigateTo($"/create-requirement/{t.Id}");
+    }
+
+    private void ViewRequirement(Requirement t)
+    {
+        if (!perms.CanView) return;
+        NavigationManager.NavigateTo($"/create-requirement/{t.Id}");
+    }
+
+    private void GoToAnalysis(Requirement requirement) =>
+        NavigationManager.NavigateTo(AppRoutes.RequirementAnalysis(requirement.Id));
+
+    private void DeleteTask(Requirement t)
+    {
+        if (!perms.CanDelete) return;
+        var response = ticketDeletionEngine.Execute(new RequirementDeletionRequest { TicketId = t.Id });
+        if (!response.Success) JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+        LoadAllItemsForFacets();
+        GetTickets();
+    }
+
+    private async System.Threading.Tasks.Task OnRequirementMoved(KanbanMoveEventArgs<Requirement> args)
+    {
+        if (!perms.CanEdit || args.Item.RequirementStatusId == args.NewStatusId) return;
+
+        if (IsFinalizedRequirementStatus(args.NewStatusId) && !perms.CanFinalize)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "No tiene permiso para finalizar requerimientos.");
+            return;
+        }
+
+        var r = args.Item;
+        var previousStatusId = r.RequirementStatusId;
+        var previousStatusLabel = r.RequirementStatus;
+        var newStatusLabel = kanbanColumns.FirstOrDefault(c => c.Id == args.NewStatusId)?.Title ?? r.RequirementStatus;
+
+        r.RequirementStatusId = args.NewStatusId;
+        r.RequirementStatus = newStatusLabel;
+        StateHasChanged();
+
+        var response = ticketUpdateEngine.Execute(new RequirementUpdateRequest
+        {
+            Id = r.Id,
+            ProjectId = r.ProjectId,
+            Description = r.Description,
+            Scope = r.Scope,
+            PriorityId = r.PriorityId,
+            RequirementStatusId = args.NewStatusId,
+            StartDate = r.StartDate,
+            EndDate = r.EndDate,
+            ActualEndDate = r.ActualEndDate,
+            RequesterName = r.RequesterName ?? string.Empty,
+            RequestDate = r.RequestDate == default ? r.StartDate : r.RequestDate,
+            ImpactedSystems = r.ImpactedSystems ?? string.Empty,
+            FreshDeskTicketNumber = r.FreshDeskTicketNumber,
+            IsWithinOriginalScope = r.IsWithinOriginalScope,
+            ScopeChangeReason = r.ScopeChangeReason,
+            IsProductionReprocess = r.IsProductionReprocess,
+            Files = new(),
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            r.RequirementStatusId = previousStatusId;
+            r.RequirementStatus = previousStatusLabel;
+            StateHasChanged();
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+        }
+    }
+
+    private bool IsFinalizedRequirementStatus(long statusId)
+    {
+        var status = requirementStatuses.FirstOrDefault(s => s.Id == statusId);
+        return status != null && FinalizeStatusHelper.IsRequirementFinalized(status.IsClosed);
+    }
+
+    private static string GetInitialScopeLabel(Requirement requirement)
+    {
+        if (requirement.IsWithinOriginalScope)
+            return "Dentro del alcance";
+
+        return requirement.ScopeChangeReason switch
+        {
+            (short)TaskScopeChangeReason.Internal => "Fuera · Por nosotros",
+            (short)TaskScopeChangeReason.External => "Fuera · Externo",
+            _ => "Fuera del alcance"
+        };
+    }
+
+    private static string GetInitialScopeBadgeClass(Requirement requirement) =>
+        StatusBadgeHelper.TableBadgeBase + "font-semibold whitespace-nowrap " +
+        (requirement.IsWithinOriginalScope
+            ? "bg-green-100 text-green-800"
+            : "bg-amber-100 text-amber-800");
+
+    private static string GetRequirementTypeLabel(bool isProductionReprocess) =>
+        isProductionReprocess ? "Reproceso producción" : "Nuevo requerimiento";
+
+    private static string GetRequirementTypeBadgeClass(bool isProductionReprocess) =>
+        StatusBadgeHelper.TableBadgeBase + "font-semibold whitespace-nowrap " +
+        (isProductionReprocess ? "bg-rose-100 text-rose-800" : "bg-sky-100 text-sky-800");
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (enterpriseValue > 0) count++;
+        if (customerValue > 0) count++;
+        if (projectValue > 0) count++;
+        if (FacetFilter.IsActive(statusIds, requirementStatuses.Count)) count++;
+        return count;
+    }
+
+    private void ClearFilters()
+    {
+        enterpriseValue = 0;
+        customerValue = 0;
+        projectValue = 0;
+        statusIds = new HashSet<long>();
+        customers = allCustomers.ToList();
+        projects = new();
+        RefreshFacetOptions();
+        GetTickets();
+    }
+
+    string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+}

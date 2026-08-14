@@ -1,0 +1,41 @@
+﻿@page "/download-page/{RequirementId}"
+@using GestionProyectos.Engine.Feature.Requirement.DownloadFile
+@using GestionProyectos.Engine.Feature.Requirement.DownloadFile.Request
+@inject IDownloadFileEngine downloadFileEngine;
+@inject IJSRuntime JSRuntime
+
+<h3>DownloadPage</h3>
+
+@code {
+    [Parameter]
+    public string RequirementId { get; set; } = string.Empty;
+
+    // MÉTODO QUE SE EJECUTARÁ AL INICIO DE LA PÁGINA
+    protected override async void OnInitialized()
+    {
+        long.TryParse(RequirementId, out long requirement);
+        DownloadFileRequest request = new()
+            {
+                RequirementId = requirement
+            };
+        var response = downloadFileEngine.Execute(request);
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        if (response.Data?.AttachmentFiles == null || response.Data.AttachmentFiles.Count == 0)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "No existen archivos adjuntos.");
+            return;
+        }
+
+        foreach (var item in response.Data!.AttachmentFiles)
+        {
+            string base64String = Convert.ToBase64String(item.File);
+            await JSRuntime.InvokeVoidAsync("descargarArchivo", item.Name, base64String);
+        }
+    }
+}

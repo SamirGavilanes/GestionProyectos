@@ -1,0 +1,105 @@
+@inject IJSRuntime JSRuntime
+
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@using GestionProyectos.Engine.Feature.Billing.Response
+
+<div class="billing-pivot-shell billing-pivot-shell--fill overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+    <div id="@ContainerId" class="billing-pivot-wrap min-h-0 flex-1 overflow-hidden p-1.5"></div>
+</div>
+
+@code {
+    private static readonly JsonSerializerOptions PivotJsonOptions = new()
+    {
+        PropertyNamingPolicy = null
+    };
+
+    [Parameter] public string ContainerId { get; set; } = "billing-pivot-container";
+    [Parameter] public IReadOnlyList<BillingTimeLogRow>? Rows { get; set; }
+    [Parameter] public int DataVersion { get; set; }
+
+    private int renderedVersion = -1;
+    private bool isRendering;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Rows == null || Rows.Count == 0)
+        {
+            renderedVersion = -1;
+            await JSRuntime.InvokeVoidAsync("disposeBillingPivot", ContainerId);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Rows == null || Rows.Count == 0 || isRendering)
+            return;
+
+        var needsRender = renderedVersion != DataVersion
+            || await JSRuntime.InvokeAsync<bool>("billingPivotIsEmpty", ContainerId);
+
+        if (!needsRender)
+            return;
+
+        isRendering = true;
+        try
+        {
+            var records = Rows.Select(r => new BillingPivotJsRow
+            {
+                Fecha = r.ExecutionDate.ToString("yyyy-MM-dd"),
+                TipoDeHora = r.HourTypeName ?? string.Empty,
+                Proyecto = r.ProjectDescription ?? string.Empty,
+                Requerimiento = r.RequirementDescription ?? string.Empty,
+                Cliente = r.CustomerName ?? string.Empty,
+                Empresa = r.EnterpriseName ?? string.Empty,
+                MiembroDeEquipo = r.UserName ?? string.Empty,
+                Tarea = r.TaskDescription ?? string.Empty,
+                Horas = (double)r.UsedHours,
+                Avance = (double)r.ProgressPercent
+            }).ToList();
+
+            var payload = JsonSerializer.Serialize(records, PivotJsonOptions);
+            await JSRuntime.InvokeVoidAsync("renderBillingPivot", ContainerId, payload);
+            renderedVersion = DataVersion;
+            await JSRuntime.InvokeVoidAsync("syncBillingPivotHeight", ContainerId);
+            await JSRuntime.InvokeVoidAsync("initLucideIcons");
+        }
+        finally
+        {
+            isRendering = false;
+        }
+    }
+
+    private sealed class BillingPivotJsRow
+    {
+        [JsonPropertyName("Fecha")]
+        public string Fecha { get; set; } = string.Empty;
+
+        [JsonPropertyName("Tipo de hora")]
+        public string TipoDeHora { get; set; } = string.Empty;
+
+        [JsonPropertyName("Proyecto")]
+        public string Proyecto { get; set; } = string.Empty;
+
+        [JsonPropertyName("Requerimiento")]
+        public string Requerimiento { get; set; } = string.Empty;
+
+        [JsonPropertyName("Cliente")]
+        public string Cliente { get; set; } = string.Empty;
+
+        [JsonPropertyName("Empresa")]
+        public string Empresa { get; set; } = string.Empty;
+
+        [JsonPropertyName("Miembro de equipo")]
+        public string MiembroDeEquipo { get; set; } = string.Empty;
+
+        [JsonPropertyName("Tarea")]
+        public string Tarea { get; set; } = string.Empty;
+
+        [JsonPropertyName("Horas")]
+        public double Horas { get; set; }
+
+        [JsonPropertyName("Avance")]
+        public double Avance { get; set; }
+    }
+}

@@ -1,0 +1,28 @@
+@inject NavigationManager NavigationManager
+
+@if (!string.IsNullOrWhiteSpace(Href))
+{
+    <button type="button"
+            class="@CssClass"
+            title="@Title"
+            @onclick="Navigate">
+        @ChildContent
+    </button>
+}
+else
+{
+    <span class="@CssClass" title="@Title">@ChildContent</span>
+}
+
+@code {
+    [Parameter] public string? Href { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string CssClass { get; set; } = "block max-w-full truncate text-left font-medium text-primary-700 hover:underline";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private void Navigate()
+    {
+        if (string.IsNullOrWhiteSpace(Href)) return;
+        NavigationManager.NavigateTo(Href);
+    }
+}

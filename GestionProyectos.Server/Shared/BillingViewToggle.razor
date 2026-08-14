@@ -1,0 +1,37 @@
+@inject IJSRuntime JSRuntime
+
+<div class="@Tw.TabGroup" role="group" aria-label="Vista del reporte">
+    <button type="button"
+            class="@(ViewMode == Pivot ? Tw.TabIconActive : Tw.TabIconInactive)"
+            title="Tabla pivot"
+            aria-label="Tabla pivot"
+            @onclick="() => SetView(Pivot)">
+        <LucideIcon Name="layout-grid" CssClass="h-3.5 w-3.5" />
+    </button>
+    <button type="button"
+            class="@(ViewMode == Raw ? Tw.TabIconActive : Tw.TabIconInactive)"
+            title="Registro bruto"
+            aria-label="Registro bruto"
+            @onclick="() => SetView(Raw)">
+        <LucideIcon Name="table" CssClass="h-3.5 w-3.5" />
+    </button>
+</div>
+
+@code {
+    public const string Pivot = "pivot";
+    public const string Raw = "raw";
+
+    [Parameter] public string ViewMode { get; set; } = Pivot;
+    [Parameter] public EventCallback<string> ViewModeChanged { get; set; }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    private async System.Threading.Tasks.Task SetView(string mode)
+    {
+        await ViewModeChanged.InvokeAsync(mode);
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+}

@@ -1,0 +1,64 @@
+<div class="@($"overflow-hidden rounded-lg border bg-white shadow-sm {ContainerClass}")">
+    <button type="button"
+            class="@($"flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition {HeaderClass}")"
+            @onclick="ToggleAsync"
+            aria-expanded="@IsOpen">
+        <div class="flex min-w-0 items-center gap-2.5">
+            @if (!string.IsNullOrWhiteSpace(Icon))
+            {
+                <span class="@($"flex h-8 w-8 shrink-0 items-center justify-center rounded-lg {IconWrapClass}")">
+                    <LucideIcon Name="@Icon" CssClass="@($"h-4 w-4 {IconClass}")" />
+                </span>
+            }
+            <div class="min-w-0">
+                <h2 class="@Tw.TextCardTitle">@Title</h2>
+                @if (!string.IsNullOrWhiteSpace(Subtitle))
+                {
+                    <p class="truncate text-xs text-gray-500">@Subtitle</p>
+                }
+            </div>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+            @if (Badge != null)
+            {
+                @Badge
+            }
+            @if (HeaderActions != null)
+            {
+                <div @onclick:stopPropagation="true">
+                    @HeaderActions
+                </div>
+            }
+            <LucideIcon Name="@(IsOpen ? "chevron-up" : "chevron-down")" CssClass="h-4 w-4 text-gray-400" />
+        </div>
+    </button>
+    @if (IsOpen)
+    {
+        <div class="@($"border-t px-4 py-3 {BodyClass}")">
+            @ChildContent
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = string.Empty;
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
+    [Parameter] public RenderFragment? Badge { get; set; }
+    [Parameter] public RenderFragment? HeaderActions { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string ContainerClass { get; set; } = "border-gray-200";
+    [Parameter] public string HeaderClass { get; set; } = "hover:bg-gray-50/80";
+    [Parameter] public string BodyClass { get; set; } = "border-gray-100";
+    [Parameter] public string IconWrapClass { get; set; } = "bg-gray-100 text-gray-600";
+    [Parameter] public string IconClass { get; set; } = string.Empty;
+
+    private async Task ToggleAsync()
+    {
+        IsOpen = !IsOpen;
+        if (IsOpenChanged.HasDelegate)
+            await IsOpenChanged.InvokeAsync(IsOpen);
+    }
+}

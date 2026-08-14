@@ -1,0 +1,496 @@
+﻿@page "/reporte-horas"
+@page "/billing"
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+@inject IBillingReportEngine billingReportEngine
+@inject ICatalogEngine catalogEngine
+@inject ICustomerReadEngine customerReadEngine
+@inject IProjectReadEngine projectReadEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Catalog.Request
+@using GestionProyectos.Engine.Feature.Billing
+@using GestionProyectos.Engine.Feature.Billing.Request
+@using GestionProyectos.Engine.Feature.Billing.Response
+@using GestionProyectos.Engine.Feature.Customer.Read
+@using GestionProyectos.Engine.Feature.Customer.Read.Request
+@using GestionProyectos.Engine.Feature.Project.Read
+@using GestionProyectos.Engine.Feature.Project.Read.Request
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+@implements IDisposable
+
+<AuthorizeView>
+    <Authorized>
+        <PagePermissionGuard PageRoute="@AppRoutes.ReporteHoras">
+            <PageHeader Title="Reporte de horas"
+                        Subtitle="Horas registradas, agrupadas por tipo de hora."
+                        ShowFacetsToggle="true"
+                        FacetsVisible="showFacets"
+                        FacetsVisibleChanged="@(v => showFacets = v)"
+                        ActiveFilterCount="@GetActiveFilterCount()">
+                <Actions>
+                    <BillingViewToggle ViewMode="@viewMode" ViewModeChanged="SetViewMode" />
+                    <TableRefreshButton OnClick="LoadDataAsync" Disabled="@loading" />
+                    <button type="button" class="@Tw.BtnOutline" @onclick="ExportExcelAsync" disabled="@loading || reportData?.Rows.Count == 0">
+                        <LucideIcon Name="download" CssClass="h-3.5 w-3.5" /> Excel
+                    </button>
+                </Actions>
+            </PageHeader>
+
+            <FilteredPageLayout FacetsVisible="showFacets"
+                                FacetsVisibleChanged="@(v => showFacets = v)"
+                                ActiveFilterCount="@GetActiveFilterCount()"
+                                OnClearFacets="ClearFilters">
+                <Facets>
+                    <OrganizationFacetSections EnterpriseOptions="enterpriseOptions"
+                                               CustomerOptions="customerOptions"
+                                               ProjectOptions="projectOptions"
+                                               RequirementOptions="requirementOptions"
+                                               EnterpriseId="enterpriseValue"
+                                               CustomerId="customerValue"
+                                               ProjectId="projectValue"
+                                               RequirementId="requirementValue"
+                                               EnterpriseIdChanged="FilterEnterpriseChange"
+                                               CustomerIdChanged="FilterCustomerChange"
+                                               ProjectIdChanged="FilterProjectChange"
+                                               RequirementIdChanged="FilterRequirementChange" />
+                    <FacetSection Title="Tipo de hora">
+                        <FacetCheckboxList Options="hourTypeOptions"
+                                           SelectedIds="hourTypeIds"
+                                           SelectedIdsChanged="FilterHourTypeChange" />
+                    </FacetSection>
+                    <FacetSection Title="Periodo">
+                        <FacetDatePeriod StartDate="startDate"
+                                         StartDateChanged="v => startDate = v"
+                                         EndDate="endDate"
+                                         EndDateChanged="v => endDate = v"
+                                         Preset="datePreset"
+                                         PresetChanged="v => datePreset = v"
+                                         Counts="periodCounts"
+                                         OnChanged="OnPeriodChanged" />
+                    </FacetSection>
+                </Facets>
+                <ChildContent>
+            @if (!string.IsNullOrWhiteSpace(loadError))
+            {
+                <div class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">@loadError</div>
+            }
+
+            @if (loading && reportData == null)
+            {
+                <div class="@Tw.Card flex items-center justify-center gap-2 py-16">
+                    <LucideIcon Name="refresh-cw" CssClass="h-5 w-5 animate-spin text-primary-500" />
+                    <p class="text-xs text-gray-500">Cargando reporte...</p>
+                </div>
+            }
+            else if (reportData == null || reportData.Rows.Count == 0)
+            {
+                <div class="@Tw.Card flex flex-col items-center justify-center py-12 text-center">
+                    <LucideIcon Name="receipt" CssClass="mb-2 h-8 w-8 text-gray-300" />
+                    <p class="text-xs text-gray-600">No hay horas registradas con los filtros seleccionados.</p>
+                    <p class="mt-1 text-xs text-gray-400">Amplíe el rango de fechas o ajuste los filtros.</p>
+                </div>
+            }
+            else if (viewMode == ViewPivot)
+            {
+                <div class="billing-pivot-page">
+                    <BillingPivotPanel @key="@($"pivot-{dataVersion}")"
+                                       Rows="reportData.Rows"
+                                       DataVersion="dataVersion"
+                                       ContainerId="@PivotContainerId" />
+                </div>
+            }
+            else
+            {
+                <div class="@Tw.TableWrapContained max-h-[32rem] overflow-y-auto">
+                    <table class="@Tw.Table">
+                        <colgroup>
+                            <col class="w-[4.5rem]" />
+                            <col class="w-[6rem]" />
+                            <col class="w-[9rem]" />
+                            <col />
+                            <col />
+                            <col class="w-[7rem]" />
+                            <col class="w-[5rem]" />
+                            <col class="w-[6rem]" />
+                        </colgroup>
+                        <thead>
+                            <tr>
+                                <th class="@Tw.Th">Fecha</th>
+                                <th class="@Tw.Th">Tipo hora</th>
+                                <th class="@Tw.Th">Proyecto</th>
+                                <th class="@Tw.Th">Requerimiento</th>
+                                <th class="@Tw.Th">Tarea</th>
+                                <th class="@Tw.Th">Miembro de equipo</th>
+                                <th class="@Tw.Th text-right">Horas</th>
+                                <th class="@Tw.Th text-right">ID</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in reportData.Rows)
+                            {
+                                <tr class="hover:bg-gray-50/80">
+                                    <td class="@Tw.Td tabular-nums">@row.ExecutionDate.ToString("dd/MM/yyyy")</td>
+                                    <td class="@Tw.Td">
+                                        <StatusBadge Compact="true" Label="@row.HourTypeName" Color="@row.HourTypeBadgeColor" />
+                                    </td>
+                                    <td class="@Tw.TdText" title="@row.ProjectDescription">
+                                        <RecordLink Href="@AppRoutes.ProjectDetail(row.ProjectId)" Title="@row.ProjectDescription">
+                                            @row.ProjectDescription
+                                        </RecordLink>
+                                    </td>
+                                    <td class="@Tw.TdText" title="@row.RequirementDescription">
+                                        <RecordLink Href="@AppRoutes.RequirementDetail(row.RequirementId)"
+                                                    Title="@row.RequirementDescription">
+                                            #@row.RequirementId · @row.RequirementDescription
+                                        </RecordLink>
+                                    </td>
+                                    <td class="@Tw.TdText" title="@row.TaskDescription">
+                                        <RecordLink Href="@AppRoutes.TaskDetail(row.TaskId)"
+                                                    Title="@row.TaskDescription">
+                                            #@row.TaskId · @row.TaskDescription
+                                        </RecordLink>
+                                    </td>
+                                    <td class="@Tw.TdText">@row.UserName</td>
+                                    <td class="@($"{Tw.Td} text-right font-semibold tabular-nums")">@FormatHours(row.UsedHours)</td>
+                                    <td class="@($"{Tw.Td} text-right tabular-nums text-gray-400")">@row.TimeLogId</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+                </ChildContent>
+            </FilteredPageLayout>
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private const string ViewPivot = "pivot";
+    private const string ViewRaw = "raw";
+    private const string PivotContainerId = "billing-pivot-container";
+
+    private string viewMode = ViewPivot;
+    private bool showFacets = false;
+    private bool loading;
+    private int dataVersion;
+    private string? loadError;
+    private Context context = new();
+
+    private DateTime endDate = DateTime.Today;
+    private DateTime startDate;
+    private DatePeriodPreset datePreset = DatePeriodHelper.DefaultPreset;
+    private IReadOnlyDictionary<DatePeriodPreset, int> periodCounts = new Dictionary<DatePeriodPreset, int>();
+    private List<BillingTimeLogRow> periodCountRows = new();
+    private long enterpriseValue;
+    private long customerValue;
+    private long projectValue;
+    private long requirementValue;
+    private HashSet<long> hourTypeIds = new();
+
+    private List<Enterprise> enterprises = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> allCustomers = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> customerList = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> projectList = new();
+    private List<Requirement> requirementList = new();
+    private List<HourType> hourTypes = new();
+    private List<BillingTimeLogRow> facetSourceRows = new();
+    private List<FacetOption> enterpriseOptions = new();
+    private List<FacetOption> customerOptions = new();
+    private List<FacetOption> projectOptions = new();
+    private List<FacetOption> requirementOptions = new();
+    private List<FacetOption> hourTypeOptions = new();
+
+    private BillingReportResponse? reportData;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        var relative = Navigation.ToBaseRelativePath(Navigation.Uri).TrimStart('/');
+        if (relative.Equals("billing", StringComparison.OrdinalIgnoreCase))
+            Navigation.NavigateTo(AppRoutes.ReporteHoras, replace: true);
+
+        context = await session!.GetStorage<Context>("session") ?? new();
+        DatePeriodHelper.ApplyPreset(datePreset, out startDate, out endDate);
+
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        allCustomers = customerReadEngine.GetCustomers().Data?.Customers?.ToList() ?? new();
+        customerList = allCustomers.ToList();
+        hourTypes = catalogEngine.GetCatalog<HourType>().Data ?? new();
+
+        await LoadDataAsync();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    private async System.Threading.Tasks.Task LoadDataAsync()
+    {
+        loading = true;
+        loadError = null;
+
+        var response = billingReportEngine.Execute(new BillingReportRequest
+        {
+            Context = context,
+            StartDate = startDate,
+            EndDate = endDate,
+            EnterpriseId = enterpriseValue,
+            CustomerId = customerValue,
+            ProjectId = projectValue,
+            RequirementId = requirementValue,
+            HourTypeId = FacetFilter.ToApiSingleId(hourTypeIds)
+        });
+
+        loading = false;
+
+        if (!response.Success || response.Data == null)
+        {
+            loadError = string.IsNullOrWhiteSpace(response.Message?.Description)
+                ? "No se pudo cargar el reporte."
+                : response.Message.Description;
+            reportData = null;
+            await JSRuntime.InvokeVoidAsync("disposeBillingPivot", PivotContainerId);
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        reportData = response.Data;
+        if (FacetFilter.IsActive(hourTypeIds, hourTypes.Count))
+            reportData.Rows = reportData.Rows.Where(r => hourTypeIds.Contains(r.HourTypeId)).ToList();
+        dataVersion++;
+        await LoadFacetSourceAsync();
+        await LoadPeriodCountSourceAsync();
+        RefreshFacetOptions();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async System.Threading.Tasks.Task LoadFacetSourceAsync()
+    {
+        var response = billingReportEngine.Execute(new BillingReportRequest
+        {
+            Context = context,
+            StartDate = startDate,
+            EndDate = endDate
+        });
+        facetSourceRows = response.Success && response.Data != null
+            ? response.Data.Rows
+            : new List<BillingTimeLogRow>();
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private async System.Threading.Tasks.Task LoadPeriodCountSourceAsync()
+    {
+        var (rangeStart, rangeEnd) = DatePeriodHelper.GetRange(DatePeriodPreset.LastYear);
+        var response = billingReportEngine.Execute(new BillingReportRequest
+        {
+            Context = context,
+            StartDate = rangeStart,
+            EndDate = rangeEnd
+        });
+        periodCountRows = response.Success && response.Data != null
+            ? response.Data.Rows
+            : new List<BillingTimeLogRow>();
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private void RefreshFacetOptions()
+    {
+        var enterpriseCatalog = enterprises.Select(e => (e.Id, e.Description));
+        enterpriseOptions = enterpriseCatalog.ToFacetOptionsByName(
+            facetSourceRows,
+            r => r.EnterpriseName,
+            MatchesBillingRow(enterpriseId: 0),
+            enterpriseValue);
+
+        var customerCatalog = customerList.Select(c => (c.Id, GetCustomerOptionLabel(c)));
+        customerOptions = customerCatalog.ToFacetOptionsByName(
+            facetSourceRows,
+            r => r.CustomerName,
+            MatchesBillingRow(customerId: 0),
+            customerValue);
+
+        var projectCatalog = projectList.Select(p => (p.Id, p.Description));
+        projectOptions = projectCatalog.ToFacetOptions(
+            facetSourceRows,
+            r => r.ProjectId,
+            MatchesBillingRow(projectId: 0),
+            projectValue);
+
+        var requirementCatalog = requirementList.Select(r => (r.Id, $"#{r.Id} · {r.Description}"));
+        requirementOptions = requirementCatalog.ToFacetOptions(
+            facetSourceRows,
+            r => r.RequirementId,
+            MatchesBillingRow(requirementId: 0),
+            requirementValue);
+
+        var hourTypeCatalog = hourTypes.Select(h => (h.Id, h.Description));
+        hourTypeOptions = hourTypeCatalog.ToFacetOptions(
+            facetSourceRows,
+            r => r.HourTypeId,
+            MatchesBillingRow(hourTypeId: 0),
+            hourTypeIds);
+
+        periodCounts = DatePeriodHelper.CountByPresets(
+            (rangeStart, rangeEnd) => periodCountRows.Count(r =>
+                MatchesBillingRow()(r)
+                && DatePeriodHelper.IsDateInRange(r.ExecutionDate, rangeStart, rangeEnd)),
+            startDate,
+            endDate);
+    }
+
+    private Func<BillingTimeLogRow, bool> MatchesBillingRow(
+        long enterpriseId = -1,
+        long customerId = -1,
+        long projectId = -1,
+        long requirementId = -1,
+        long hourTypeId = -1)
+    {
+        var enterpriseFilter = enterpriseId == -1 ? enterpriseValue : enterpriseId;
+        var customerFilter = customerId == -1 ? customerValue : customerId;
+        var projectFilter = projectId == -1 ? projectValue : projectId;
+        var requirementFilter = requirementId == -1 ? requirementValue : requirementId;
+
+        var enterpriseName = enterpriseFilter > 0
+            ? enterprises.FirstOrDefault(e => e.Id == enterpriseFilter)?.Description
+            : null;
+        var customerName = customerFilter > 0
+            ? customerList.FirstOrDefault(c => c.Id == customerFilter)?.Description
+            : null;
+
+        return row =>
+            (enterpriseFilter == 0 || string.Equals(row.EnterpriseName, enterpriseName, StringComparison.OrdinalIgnoreCase))
+            && (customerFilter == 0 || string.Equals(row.CustomerName, customerName, StringComparison.OrdinalIgnoreCase))
+            && (projectFilter == 0 || row.ProjectId == projectFilter)
+            && (requirementFilter == 0 || row.RequirementId == requirementFilter)
+            && (hourTypeId == 0 || FacetFilter.Matches(row.HourTypeId, hourTypeIds, hourTypes.Count));
+    }
+
+    private async System.Threading.Tasks.Task ExportExcelAsync()
+    {
+        if (reportData == null || reportData.Rows.Count == 0)
+            return;
+
+        var response = billingReportEngine.Export(new BillingExportRequest
+        {
+            Mode = viewMode == ViewRaw ? BillingExportMode.Raw : BillingExportMode.Pivot,
+            PivotGroupBy = BillingPivotGroupBy.Project,
+            Data = reportData
+        });
+
+        if (!response.Success || response.Data == null)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message?.Description ?? "No se pudo exportar.");
+            return;
+        }
+
+        var fileName = string.IsNullOrWhiteSpace(response.Data.FileName)
+            ? "facturacion.xlsx"
+            : response.Data.FileName;
+
+        await JSRuntime.InvokeVoidAsync("saveAsFile", fileName, response.Data.FileBase64);
+    }
+
+    private async System.Threading.Tasks.Task SetViewMode(string mode)
+    {
+        if (viewMode == ViewPivot && mode != ViewPivot)
+            await JSRuntime.InvokeVoidAsync("disposeBillingPivot", PivotContainerId);
+
+        viewMode = mode;
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    private async System.Threading.Tasks.Task FilterEnterpriseChange(long id)
+    {
+        enterpriseValue = id;
+        customerValue = 0;
+        projectValue = 0;
+        requirementValue = 0;
+        customerList = enterpriseValue > 0
+            ? customerReadEngine.GetCustomersByEnterprise(new CustomerReadRequest { EnterpriseId = enterpriseValue }).Data?.Customers?.ToList() ?? new()
+            : allCustomers.ToList();
+        projectList = new();
+        requirementList = new();
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task FilterCustomerChange(long id)
+    {
+        customerValue = id;
+        projectValue = 0;
+        requirementValue = 0;
+        projectList = customerValue > 0
+            ? projectReadEngine.GetProjectsByCustomer(new ProjectReadRequest { CustomerId = customerValue }).Data?.Projects?.ToList() ?? new()
+            : new();
+        requirementList = new();
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task FilterProjectChange(long id)
+    {
+        projectValue = id;
+        requirementValue = 0;
+        requirementList = projectValue > 0
+            ? catalogEngine.GetTickets(new GetTicketRequest { ProjectId = projectValue }).Data ?? new()
+            : new();
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task FilterRequirementChange(long id)
+    {
+        requirementValue = id;
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task FilterHourTypeChange(IReadOnlySet<long> ids)
+    {
+        hourTypeIds = new HashSet<long>(ids);
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task OnPeriodChanged() => await LoadDataAsync();
+
+    private static string FormatHours(decimal hours) => hours.ToString("0.##");
+
+    private static string GetCustomerOptionLabel(GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer item) =>
+        string.IsNullOrWhiteSpace(item.Enterprise) ? item.Description : $"{item.Description} ({item.Enterprise})";
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (enterpriseValue > 0) count++;
+        if (customerValue > 0) count++;
+        if (projectValue > 0) count++;
+        if (requirementValue > 0) count++;
+        if (FacetFilter.IsActive(hourTypeIds, hourTypes.Count)) count++;
+        if (DatePeriodHelper.IsFilterActive(datePreset, startDate, endDate)) count++;
+        return count;
+    }
+
+    private async System.Threading.Tasks.Task ClearFilters()
+    {
+        enterpriseValue = 0;
+        customerValue = 0;
+        projectValue = 0;
+        requirementValue = 0;
+        hourTypeIds = new HashSet<long>();
+        datePreset = DatePeriodHelper.DefaultPreset;
+        DatePeriodHelper.ApplyPreset(datePreset, out startDate, out endDate);
+        customerList = allCustomers.ToList();
+        projectList = new();
+        requirementList = new();
+        await LoadDataAsync();
+    }
+
+    public void Dispose() =>
+        _ = JSRuntime.InvokeVoidAsync("disposeBillingPivot", PivotContainerId);
+}

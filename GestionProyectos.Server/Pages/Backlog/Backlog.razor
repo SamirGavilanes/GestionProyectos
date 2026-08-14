@@ -1,0 +1,638 @@
+@page "/backlog"
+@inject IJSRuntime JSRuntime
+@inject IBacklogEngine backlogEngine
+@inject ICatalogEngine catalogEngine
+@inject ISessionStorageService session
+@inject NavigationManager NavigationManager
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature
+@using GestionProyectos.Engine.Feature.Backlog
+@using GestionProyectos.Engine.Feature.Backlog.Request
+@using GestionProyectos.Engine.Feature.Backlog.Response
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/backlog">
+        <PageHeader Title="Backlog" Subtitle="Ideas, pendientes y funcionalidades futuras."
+                    ShowFacetsToggle="true"
+                    FacetsVisible="showFacets"
+                    FacetsVisibleChanged="@(v => showFacets = v)"
+                    ActiveFilterCount="@GetActiveFilterCount()">
+            <Actions>
+                <ListPageToolbar ShowSearch="true"
+                                 SearchValue="@searchInput"
+                                 SearchValueChanged="@(v => searchInput = v)"
+                                 ShowViewMode="true"
+                                 ViewMode="@viewMode"
+                                 ViewModeChanged="OnViewModeChanged"
+                                 OnRefresh="Load">
+                    <LeadingContent>
+                        @if (perms.CanCreate)
+                        {
+                            <button type="button" class="@Tw.BtnPrimary" @onclick="StartCreate" disabled="@creating">
+                                <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                            </button>
+                        }
+                    </LeadingContent>
+                </ListPageToolbar>
+            </Actions>
+        </PageHeader>
+
+        <FilteredPageLayout FacetsVisible="showFacets"
+                            FacetsVisibleChanged="@(v => showFacets = v)"
+                            ActiveFilterCount="@GetActiveFilterCount()"
+                            OnClearFacets="ClearFilters">
+            <Facets>
+                <FacetSection Title="Empresa">
+                    <FacetCheckboxList Options="enterpriseOptions"
+                                       MultiSelect="false"
+                                       SelectedId="enterpriseValue"
+                                       SelectedIdChanged="HandleEnterpriseChange" />
+                </FacetSection>
+                <FacetSection Title="Cliente">
+                    <FacetCheckboxList Options="customerOptions"
+                                       MultiSelect="false"
+                                       SelectedId="customerValue"
+                                       SelectedIdChanged="HandleCustomerChange" />
+                </FacetSection>
+                <FacetSection Title="Estado">
+                    <FacetCheckboxList Options="statusOptions"
+                                       SelectedIds="statusIds"
+                                       SelectedIdsChanged="HandleStatusChange" />
+                </FacetSection>
+            </Facets>
+            <ChildContent>
+        @if (viewMode == ViewList)
+        {
+        <div class="@Tw.TableWrapContained">
+            <table class="@Tw.Table">
+                <colgroup>
+                    <col class="w-14" />
+                    <col class="w-40" />
+                    <col class="w-40" />
+                    <col class="w-48" />
+                    <col />
+                    <col class="w-36" />
+                    <col class="w-28" />
+                </colgroup>
+                <thead>
+                    <tr>
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyView">Id</SortableTh>
+                        <SortableTh Column="Enterprise" State="tableState" OnSorted="ApplyView">Empresa</SortableTh>
+                        <SortableTh Column="Customer" State="tableState" OnSorted="ApplyView">Cliente</SortableTh>
+                        <SortableTh Column="Description" State="tableState" OnSorted="ApplyView">Descripción</SortableTh>
+                        <SortableTh Column="Scope" State="tableState" OnSorted="ApplyView">Alcance</SortableTh>
+                        <SortableTh Column="Status" State="tableState" OnSorted="ApplyView">Estado</SortableTh>
+                        <th class="@Tw.ThActionsAuto"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (creating && perms.CanCreate)
+                    {
+                        <tr>
+                            <td class="@Tw.Td text-gray-400">Nuevo</td>
+                            <td class="@Tw.TdEdit">
+                                <select class="@Tw.TableSelect" value="@newEnterpriseId" @onchange="OnNewEnterpriseChange">
+                                    <option value="0">-- Empresa --</option>
+                                    @foreach (var item in enterprises)
+                                    {
+                                        <option value="@item.Id">@item.Description</option>
+                                    }
+                                </select>
+                            </td>
+                            <td class="@Tw.TdEdit">
+                                <select class="@Tw.TableSelect" @bind="newCustomerId" disabled="@(newEnterpriseId == 0)">
+                                    <option value="0">-- Cliente --</option>
+                                    @foreach (var item in newCustomers)
+                                    {
+                                        <option value="@item.Id">@item.Description</option>
+                                    }
+                                </select>
+                            </td>
+                            <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newName" /></td>
+                            <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newDescription" /></td>
+                            <td class="@Tw.Td">
+                                <StatusBadge Compact="true" Label="@GetDefaultStatusLabel()" Color="@GetDefaultStatusColor()" />
+                            </td>
+                            <td class="@Tw.TdActionsAuto">
+                                <div class="@Tw.TableActions">
+                                    <button type="button" class="@Tw.TableBtn" @onclick="Create">Guardar</button>
+                                    <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                    @if (displayItems.Count == 0 && !creating)
+                    {
+                        <tr><td colspan="7" class="@Tw.Td text-center text-gray-400">No hay registros</td></tr>
+                    }
+                    @foreach (var item in displayItems)
+                    {
+                        <tr class="hover:bg-gray-50">
+                            <td class="@Tw.Td w-14">@item.Id</td>
+                            @if (editingId == item.Id && perms.CanEdit)
+                            {
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" value="@editEnterpriseId" @onchange="OnEditEnterpriseChange">
+                                        <option value="0">-- Empresa --</option>
+                                        @foreach (var enterprise in enterprises)
+                                        {
+                                            <option value="@enterprise.Id">@enterprise.Description</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" @bind="editCustomerId" disabled="@(editEnterpriseId == 0)">
+                                        <option value="0">-- Cliente --</option>
+                                        @foreach (var customer in editCustomers)
+                                        {
+                                            <option value="@customer.Id">@customer.Description</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="editName" /></td>
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="editDescription" /></td>
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" @bind="editStatusId">
+                                        @foreach (var status in backlogStatuses.Where(s => s.Id != enRequerimientoStatusId))
+                                        {
+                                            <option value="@status.Id">@status.Description</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="() => Update(item.Id)">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                    </div>
+                                </td>
+                            }
+                            else
+                            {
+                                <td class="@Tw.TdText" title="@item.Enterprise">@(string.IsNullOrWhiteSpace(item.Enterprise) ? "—" : item.Enterprise)</td>
+                                <td class="@Tw.TdText" title="@item.Customer">@(string.IsNullOrWhiteSpace(item.Customer) ? "—" : item.Customer)</td>
+                                <td class="@Tw.TdText" title="@item.Name">@item.Name</td>
+                                <td class="@Tw.TdText" title="@item.Description">@item.Description</td>
+                                <td class="@Tw.Td">
+                                    <StatusBadge Compact="true" Label="@item.Status" Color="@item.StatusBadgeColor" />
+                                </td>
+                                <td class="@Tw.TdActionsAuto">
+                                    @if (perms.CanEdit || perms.CanDelete || CanConvert(item))
+                                    {
+                                        <TableRowActionsMenu>
+                                            @if (perms.CanEdit)
+                                            {
+                                                <TableRowAction Label="Editar" OnClick="@(() => StartEdit(item))" />
+                                            }
+                                            @if (CanConvert(item))
+                                            {
+                                                <TableRowAction Label="A requerimiento" OnClick="@(() => GoToCreateRequirement(item))" />
+                                            }
+                                            @if (perms.CanDelete)
+                                            {
+                                                <TableRowAction Label="Eliminar" Danger OnClick="@(() => Delete(item.Id))" />
+                                            }
+                                        </TableRowActionsMenu>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyView" />
+        }
+        else
+        {
+            <KanbanBoard TItem="BacklogItemResponse"
+                         Columns="kanbanColumns"
+                         Items="filteredItems"
+                         StatusIdSelector="t => t.BacklogStatusId"
+                         EnableDrag="perms.CanEdit"
+                         OnMove="OnBacklogMoved">
+                <CardTemplate Context="item">
+                    <p class="@Tw.KanbanCardTitle" title="@item.Name">@item.Name</p>
+                    <p class="@Tw.KanbanCardMeta truncate" title="@item.Description">@item.Description</p>
+                    <p class="@Tw.KanbanCardMeta truncate">@(string.IsNullOrWhiteSpace(item.Enterprise) ? "—" : item.Enterprise) · @(string.IsNullOrWhiteSpace(item.Customer) ? "—" : item.Customer)</p>
+                    <div class="mt-1">
+                        <StatusBadge Compact="true" Label="@item.Status" Color="@item.StatusBadgeColor" />
+                    </div>
+                    <div class="mt-2 flex flex-wrap gap-1">
+                        @if (perms.CanEdit)
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => StartEdit(item)">Editar</button>
+                        }
+                        @if (CanConvert(item))
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => GoToCreateRequirement(item)">A requerimiento</button>
+                        }
+                        @if (perms.CanDelete)
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => Delete(item.Id)">Eliminar</button>
+                        }
+                    </div>
+                </CardTemplate>
+            </KanbanBoard>
+        }
+            </ChildContent>
+        </FilteredPageLayout>
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private const string ViewList = ViewModeToggle.List;
+    private const string ViewKanban = ViewModeToggle.Kanban;
+
+    private string viewMode = ViewList;
+    private bool showFacets;
+    private List<KanbanColumn> kanbanColumns = new();
+    private List<BacklogItemResponse> allItems = new();
+    private List<BacklogItemResponse> filteredItems = new();
+    private List<BacklogItemResponse> displayItems = new();
+    private List<BacklogStatus> backlogStatuses = new();
+    private List<Enterprise> enterprises = new();
+    private List<Customer> allCustomers = new();
+    private List<Customer> newCustomers = new();
+    private List<Customer> editCustomers = new();
+    private List<FacetOption> enterpriseOptions = new();
+    private List<FacetOption> customerOptions = new();
+    private List<FacetOption> statusOptions = new();
+    private readonly PagedTableState tableState = new();
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private PagePermissions requirementPerms = PagePermissions.None;
+    private bool creating;
+    private long editingId;
+    private string? searchText;
+    private long enterpriseValue;
+    private long customerValue;
+    private HashSet<long> statusIds = new();
+
+    private long newEnterpriseId;
+    private long newCustomerId;
+    private string newName = string.Empty;
+    private string newDescription = string.Empty;
+    private long editEnterpriseId;
+    private long editCustomerId;
+    private string editName = string.Empty;
+    private string editDescription = string.Empty;
+    private long editStatusId;
+    private long enRequerimientoStatusId;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/backlog");
+        requirementPerms = PermissionHelper.Resolve(context, "/requirement-list");
+        LoadCatalogs();
+        Load();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private void LoadCatalogs()
+    {
+        backlogStatuses = catalogEngine.GetBacklogStatuses().Data ?? new();
+        enRequerimientoStatusId = backlogStatuses
+            .FirstOrDefault(s => s.Description.Equals("En requerimiento", StringComparison.OrdinalIgnoreCase))?.Id ?? 0;
+        kanbanColumns = backlogStatuses
+            .Where(s => s.Id != enRequerimientoStatusId)
+            .OrderBy(s => s.Order)
+            .ThenBy(s => s.Id)
+            .Select(s => new KanbanColumn { Id = s.Id, Title = s.Description, BadgeColor = s.BadgeColor })
+            .ToList();
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        allCustomers = catalogEngine.GetCustomers().Data ?? new();
+    }
+
+    private void Load()
+    {
+        var response = backlogEngine.GetItems(new BacklogListRequest { Context = context });
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        allItems = response.Data?.Items ?? new List<BacklogItemResponse>();
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    private IEnumerable<BacklogItemResponse> GetVisibleItems()
+    {
+        if (enRequerimientoStatusId <= 0)
+            return allItems;
+        return allItems.Where(x => x.BacklogStatusId != enRequerimientoStatusId);
+    }
+
+    private void RefreshFacetOptions()
+    {
+        var source = GetVisibleItems().ToList();
+        var enterpriseCatalog = enterprises.Select(e => (e.Id, e.Description));
+        enterpriseOptions = enterpriseCatalog.ToFacetOptions(
+            source,
+            x => x.EnterpriseId,
+            MatchesBacklog(enterpriseId: 0),
+            enterpriseValue);
+
+        var customerCatalog = allCustomers.Select(c => (c.Id, GetCustomerOptionLabel(c)));
+        customerOptions = customerCatalog.ToFacetOptions(
+            source,
+            x => x.CustomerId,
+            MatchesBacklog(customerId: 0),
+            customerValue);
+
+        var statusCatalog = backlogStatuses
+            .Where(s => s.Id != enRequerimientoStatusId)
+            .Select(s => (s.Id, s.Description));
+        statusOptions = statusCatalog.ToFacetOptions(
+            source,
+            x => x.BacklogStatusId,
+            MatchesBacklog(statusId: 0),
+            statusIds);
+    }
+
+    private Func<BacklogItemResponse, bool> MatchesBacklog(
+        long enterpriseId = -1,
+        long customerId = -1,
+        long statusId = -1)
+    {
+        var enterpriseFilter = enterpriseId == -1 ? enterpriseValue : enterpriseId;
+        var customerFilter = customerId == -1 ? customerValue : customerId;
+
+        return item =>
+            (enterpriseFilter == 0 || item.EnterpriseId == enterpriseFilter)
+            && (customerFilter == 0 || item.CustomerId == customerFilter)
+            && (statusId == 0 || FacetFilter.Matches(item.BacklogStatusId, statusIds, backlogStatuses.Count));
+    }
+
+    private void HandleEnterpriseChange(long id)
+    {
+        enterpriseValue = id;
+        customerValue = 0;
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    private void HandleCustomerChange(long id)
+    {
+        customerValue = id;
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    private void HandleStatusChange(IReadOnlySet<long> ids)
+    {
+        statusIds = new HashSet<long>(ids);
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    private void OnViewModeChanged(string mode)
+    {
+        if (mode == ViewKanban)
+            Cancel();
+        viewMode = mode;
+    }
+
+    private void ApplyView()
+    {
+        IEnumerable<BacklogItemResponse> query = GetVisibleItems();
+
+        if (enterpriseValue > 0)
+            query = query.Where(x => x.EnterpriseId == enterpriseValue);
+        if (customerValue > 0)
+            query = query.Where(x => x.CustomerId == customerValue);
+        if (FacetFilter.IsActive(statusIds, backlogStatuses.Count))
+            query = query.Where(x => statusIds.Contains(x.BacklogStatusId));
+
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText.ToLower();
+            query = query.Where(x => TableSearch.Matches(s,
+                x.Id.ToString(), x.Name, x.Description, x.Status, x.Enterprise, x.Customer));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Enterprise" => tableState.SortAscending ? query.OrderBy(x => x.Enterprise) : query.OrderByDescending(x => x.Enterprise),
+            "Customer" => tableState.SortAscending ? query.OrderBy(x => x.Customer) : query.OrderByDescending(x => x.Customer),
+            "Description" => tableState.SortAscending ? query.OrderBy(x => x.Name) : query.OrderByDescending(x => x.Name),
+            "Scope" => tableState.SortAscending ? query.OrderBy(x => x.Description) : query.OrderByDescending(x => x.Description),
+            "Status" => tableState.SortAscending ? query.OrderBy(x => x.Status) : query.OrderByDescending(x => x.Status),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        filteredItems = query.ToList();
+        tableState.SetPageCount(filteredItems.Count);
+        displayItems = tableState.Paginate(filteredItems).ToList();
+    }
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (enterpriseValue > 0) count++;
+        if (customerValue > 0) count++;
+        if (FacetFilter.IsActive(statusIds, backlogStatuses.Count)) count++;
+        return count;
+    }
+
+    private void ClearFilters()
+    {
+        enterpriseValue = 0;
+        customerValue = 0;
+        statusIds = new HashSet<long>();
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    private string GetCustomerOptionLabel(Customer customer)
+    {
+        var enterprise = enterprises.FirstOrDefault(e => e.Id == customer.EnterpriseId)?.Description;
+        return string.IsNullOrWhiteSpace(enterprise)
+            ? customer.Description
+            : $"{customer.Description} · {enterprise}";
+    }
+
+    private async System.Threading.Tasks.Task OnBacklogMoved(KanbanMoveEventArgs<BacklogItemResponse> args)
+    {
+        if (!perms.CanEdit || args.Item.BacklogStatusId == args.NewStatusId) return;
+
+        var item = args.Item;
+        var previousStatusId = item.BacklogStatusId;
+        var previousStatus = item.Status;
+        var previousColor = item.StatusBadgeColor;
+        var newStatus = backlogStatuses.FirstOrDefault(s => s.Id == args.NewStatusId);
+
+        item.BacklogStatusId = args.NewStatusId;
+        item.Status = newStatus?.Description ?? item.Status;
+        item.StatusBadgeColor = newStatus?.BadgeColor ?? item.StatusBadgeColor;
+        await InvokeAsync(StateHasChanged);
+
+        var response = backlogEngine.Save(new BacklogSaveRequest
+        {
+            Id = item.Id,
+            Name = item.Name,
+            Description = item.Description,
+            BacklogStatusId = args.NewStatusId,
+            CustomerId = item.CustomerId,
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            item.BacklogStatusId = previousStatusId;
+            item.Status = previousStatus;
+            item.StatusBadgeColor = previousColor;
+            await InvokeAsync(StateHasChanged);
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        Load();
+    }
+
+    private void StartCreate()
+    {
+        if (!perms.CanCreate) return;
+        Cancel();
+        creating = true;
+    }
+
+    private void StartEdit(BacklogItemResponse item)
+    {
+        if (!perms.CanEdit) return;
+        Cancel();
+        editingId = item.Id;
+        editEnterpriseId = item.EnterpriseId;
+        editCustomerId = item.CustomerId;
+        editCustomers = editEnterpriseId > 0
+            ? allCustomers.Where(c => c.EnterpriseId == editEnterpriseId).ToList()
+            : new();
+        editName = item.Name;
+        editDescription = item.Description;
+        editStatusId = item.BacklogStatusId > 0 ? item.BacklogStatusId : GetDefaultStatusId();
+        if (viewMode == ViewKanban)
+            viewMode = ViewList;
+    }
+
+    private void Cancel()
+    {
+        creating = false;
+        editingId = 0;
+        newEnterpriseId = newCustomerId = editEnterpriseId = editCustomerId = 0;
+        newCustomers = editCustomers = new();
+        newName = editName = string.Empty;
+        newDescription = editDescription = string.Empty;
+        editStatusId = 0;
+    }
+
+    private void OnNewEnterpriseChange(ChangeEventArgs e)
+    {
+        newEnterpriseId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        newCustomerId = 0;
+        newCustomers = newEnterpriseId > 0
+            ? allCustomers.Where(c => c.EnterpriseId == newEnterpriseId).ToList()
+            : new();
+    }
+
+    private void OnEditEnterpriseChange(ChangeEventArgs e)
+    {
+        editEnterpriseId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        editCustomerId = 0;
+        editCustomers = editEnterpriseId > 0
+            ? allCustomers.Where(c => c.EnterpriseId == editEnterpriseId).ToList()
+            : new();
+    }
+
+    private void Create()
+    {
+        var response = backlogEngine.Save(new BacklogSaveRequest
+        {
+            Id = 0,
+            Name = newName,
+            Description = newDescription,
+            BacklogStatusId = 0,
+            CustomerId = newCustomerId,
+            Context = context
+        });
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel();
+        Load();
+    }
+
+    private void Update(long id)
+    {
+        if (editCustomerId <= 0)
+        {
+            JSRuntime.InvokeVoidAsync("alert", "Seleccione un cliente.");
+            return;
+        }
+
+        var response = backlogEngine.Save(new BacklogSaveRequest
+        {
+            Id = id,
+            Name = editName,
+            Description = editDescription,
+            BacklogStatusId = editStatusId,
+            CustomerId = editCustomerId,
+            Context = context
+        });
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel();
+        Load();
+    }
+
+    private void Delete(long id)
+    {
+        if (!perms.CanDelete) return;
+        var response = backlogEngine.Delete(new BacklogDeleteRequest { Id = id, Context = context });
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Load();
+    }
+
+    private bool CanConvert(BacklogItemResponse item) =>
+        requirementPerms.CanCreate && !item.StatusIsClosed;
+
+    private void GoToCreateRequirement(BacklogItemResponse item)
+    {
+        if (!CanConvert(item)) return;
+        Cancel();
+        NavigationManager.NavigateTo($"/create-requirement/0?backlogId={item.Id}");
+    }
+
+    private long GetDefaultStatusId() =>
+        backlogStatuses.FirstOrDefault(s => s.Description.Equals("Pendiente", StringComparison.OrdinalIgnoreCase))?.Id
+        ?? backlogStatuses.Where(s => !s.IsClosed).OrderBy(s => s.Order).FirstOrDefault()?.Id
+        ?? 0;
+
+    private string GetDefaultStatusLabel() =>
+        backlogStatuses.FirstOrDefault(s => s.Id == GetDefaultStatusId())?.Description ?? "Pendiente";
+
+    private string GetDefaultStatusColor() =>
+        backlogStatuses.FirstOrDefault(s => s.Id == GetDefaultStatusId())?.BadgeColor ?? "amber";
+
+    string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+}

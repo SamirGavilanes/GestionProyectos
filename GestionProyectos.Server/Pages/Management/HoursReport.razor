@@ -1,0 +1,752 @@
+﻿@page "/control-registro-horas"
+@page "/hours-report"
+
+@inject IHoursReportEngine hoursReportEngine
+
+@inject ISessionStorageService session
+
+@inject NavigationManager Navigation
+
+@inject IJSRuntime JSRuntime
+
+
+
+@using System.Globalization
+
+@using Blazored.SessionStorage
+
+@using GestionProyectos.Engine.Feature.HoursReport
+
+@using GestionProyectos.Engine.Feature.HoursReport.Request
+
+@using GestionProyectos.Engine.Feature.HoursReport.Response
+
+@using GestionProyectos.Engine.Security.Utilities
+
+@using GestionProyectos.Server.Extensions
+
+@using GestionProyectos.Shared.Enums
+
+@using Microsoft.AspNetCore.Components.Authorization
+
+
+
+@attribute [Authorize]
+
+
+
+<AuthorizeView>
+
+    <Authorized>
+
+        <PagePermissionGuard PageRoute="@AppRoutes.ControlRegistroHoras">
+
+            <PageHeader Title="Control registro horas"
+                        Subtitle="@GetPageSubtitle()">
+
+                <Actions>
+
+                    <div class="flex flex-wrap items-center gap-2">
+
+                        <button type="button"
+
+                                class="@($"{Tw.BtnOutline} !px-1.5")"
+
+                                title="Mes anterior"
+
+                                disabled="@loading"
+
+                                @onclick="GoToPreviousMonth">
+
+                            <LucideIcon Name="chevron-left" CssClass="h-4 w-4 text-gray-600" />
+
+                        </button>
+
+                        <FilterField Label="Mes">
+
+                            <input type="month"
+
+                                   class="@($"{Tw.FilterDate} date-input min-w-[9.5rem]")"
+
+                                   value="@MonthInputValue"
+
+                                   max="@MaxMonthInputValue"
+
+                                   @onchange="OnMonthChange" />
+
+                        </FilterField>
+
+                        <button type="button"
+
+                                class="@($"{Tw.BtnOutline} !px-1.5")"
+
+                                title="Mes siguiente"
+
+                                disabled="@(loading || IsCurrentMonth)"
+
+                                @onclick="GoToNextMonth">
+
+                            <LucideIcon Name="chevron-right" CssClass="h-4 w-4 text-gray-600" />
+
+                        </button>
+
+                        <TableRefreshButton OnClick="LoadDataAsync" Disabled="@loading" />
+
+                    </div>
+
+                </Actions>
+
+            </PageHeader>
+
+
+
+            @if (!string.IsNullOrWhiteSpace(loadError))
+
+            {
+
+                <div class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">@loadError</div>
+
+            }
+
+
+
+            @if (loading)
+
+            {
+
+                <div class="@Tw.Card flex items-center justify-center py-16">
+
+                    <p class="text-xs text-gray-500">Cargando reporte...</p>
+
+                </div>
+
+            }
+
+            else if (reportData == null || reportData.Users.Count == 0)
+
+            {
+
+                <div class="@Tw.Card flex flex-col items-center justify-center py-16 text-center">
+
+                    <LucideIcon Name="calendar-check" CssClass="mb-2 h-8 w-8 text-gray-300" />
+
+                    <p class="text-xs text-gray-600">No hay miembros de equipo para mostrar.</p>
+
+                </div>
+
+            }
+
+            else if (reportData.Days.Count == 0)
+
+            {
+
+                <div class="@Tw.Card flex flex-col items-center justify-center py-16 text-center">
+
+                    <LucideIcon Name="calendar" CssClass="mb-2 h-8 w-8 text-gray-300" />
+
+                    <p class="text-xs text-gray-600">No hay días disponibles en este periodo.</p>
+
+                    <p class="mt-1 text-xs text-gray-400">Solo se muestran fechas hasta hoy.</p>
+
+                </div>
+
+            }
+
+            else
+
+            {
+
+                <div class="@Tw.Card">
+                    <div class="mb-2 flex flex-wrap items-center justify-end gap-1.5">
+                        <span class="hours-report-legend hours-report-legend--ok">
+                            <span class="hours-report-status hours-report-status--ok" aria-hidden="true">✓</span> Con horas
+                        </span>
+                        <span class="hours-report-legend hours-report-legend--missing">
+                            <span class="hours-report-status hours-report-status--missing" aria-hidden="true">✕</span> Sin horas
+                        </span>
+                        <span class="hours-report-legend hours-report-legend--absent">
+                            <span class="hours-report-status hours-report-status--absent" aria-hidden="true">—</span> Ausente
+                        </span>
+                        <span class="hours-report-legend hours-report-legend--pending">
+                            <span class="hours-report-status hours-report-status--pending" aria-hidden="true">·</span> Pendiente
+                        </span>
+                    </div>
+
+                    <div class="hours-report-matrix overflow-x-auto rounded-lg border border-gray-200">
+
+                        <table class="table-striped hours-report-table w-full border-collapse text-xs">
+
+                            <colgroup>
+
+                                <col class="w-[7.5rem]" />
+
+                                <col class="w-[3.5rem]" />
+
+                                @foreach (var _ in reportData.Days)
+
+                                {
+
+                                    <col class="w-[2rem]" />
+
+                                }
+
+                            </colgroup>
+
+                            <thead>
+
+                                <tr class="border-b border-gray-200 bg-gray-50/90">
+
+                                    <th class="hours-report-user-head sticky left-0 z-20 bg-gray-50/95 px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+
+                                        Miembro de equipo
+
+                                    </th>
+
+                                    <th class="hours-report-pct-head border-l border-gray-200 bg-gray-50/95 px-1 py-2 text-center text-xs font-semibold uppercase tracking-wide text-gray-500"
+
+                                        title="Días con horas / días evaluables">
+
+                                        %
+
+                                    </th>
+
+                                    @foreach (var day in reportData.Days)
+
+                                    {
+
+                                        <th class="@GetDayHeaderClass(day)"
+
+                                            title="@day.Date.ToString("dddd d 'de' MMMM", EsCulture)">
+
+                                            <span class="block text-[0.65rem] font-normal normal-case leading-none text-gray-400">@day.WeekDayShort</span>
+
+                                            <span class="mt-0.5 block text-xs font-semibold leading-none tabular-nums">@day.Day</span>
+
+                                        </th>
+
+                                    }
+
+                                </tr>
+
+                            </thead>
+
+                            <tbody>
+
+                                @foreach (var user in DisplayUsers)
+
+                                {
+
+                                    var compliance = GetUserCompliancePercent(user.UserId);
+
+                                    <tr class="group border-b border-gray-100 last:border-b-0">
+
+                                        <td class="hours-report-user-cell hours-report-sticky sticky left-0 z-10 truncate px-2 py-1.5 font-medium text-gray-800"
+
+                                            title="@user.UserName">
+
+                                            @user.UserName
+
+                                        </td>
+
+                                        <td class="hours-report-sticky hours-report-pct-cell border-l border-gray-100 px-1 py-1">
+
+                                            <div class="flex flex-col items-center gap-0.5">
+
+                                                <span class="@GetUserComplianceClass(user.UserId)">@compliance%</span>
+
+                                                <div class="h-0.5 w-full overflow-hidden rounded-full bg-gray-100">
+
+                                                    <div class="h-full rounded-full @GetComplianceBarClass(compliance)"
+
+                                                         style="width: @compliance%"></div>
+
+                                                </div>
+
+                                            </div>
+
+                                        </td>
+
+                                        @foreach (var day in reportData.Days)
+
+                                        {
+
+                                            var hasHours = HasHours(user.UserId, day.Date);
+
+                                            var isAbsent = IsAbsent(user.UserId, day.Date);
+
+                                            var isMissingPastDay = IsMissingPastDay(day, hasHours, isAbsent);
+
+                                            <td class="@($"{GetDayCellClass(day)} hours-report-day-cell")"
+
+                                                title="@GetDayCellTitle(user.UserId, day, hasHours, isAbsent, isMissingPastDay)">
+
+                                                <span class="hours-report-marker">
+
+                                                    <span class="@GetDayStatusClass(hasHours, isAbsent, isMissingPastDay)"
+
+                                                          aria-hidden="true">@GetDayStatusSymbol(hasHours, isAbsent, isMissingPastDay)</span>
+
+                                                </span>
+
+                                            </td>
+
+                                        }
+
+                                    </tr>
+
+                                }
+
+                            </tbody>
+
+                        </table>
+
+                    </div>
+
+                </div>
+
+            }
+
+        </PagePermissionGuard>
+
+    </Authorized>
+
+</AuthorizeView>
+
+
+
+@code {
+
+    private static readonly CultureInfo EsCulture = CultureInfo.GetCultureInfo("es-ES");
+
+
+
+    private bool loading;
+
+    private string? loadError;
+
+    private Context context = new();
+
+    private HoursReportReadResponse? reportData;
+
+
+
+    private int selectedYear;
+
+    private int selectedMonth;
+
+
+
+    private string MonthInputValue => $"{selectedYear:D4}-{selectedMonth:D2}";
+
+    private string MaxMonthInputValue => $"{Today.Year:D4}-{Today.Month:D2}";
+
+    private string PeriodLabel => new DateTime(selectedYear, selectedMonth, 1).ToString("MMMM yyyy", EsCulture);
+
+    private string GetPageSubtitle()
+    {
+        if (loading)
+            return $"{PeriodLabel} · Cargando matriz...";
+
+        if (reportData == null || reportData.Users.Count == 0 || reportData.Days.Count == 0)
+            return "Matriz de registro diario por miembro de equipo.";
+
+        var members = reportData.Users.Count == 1
+            ? "1 miembro de equipo"
+            : $"{reportData.Users.Count} miembros de equipo";
+        var days = $"{reportData.Days.Count} día{(reportData.Days.Count == 1 ? "" : "s")} mostrados";
+        return $"{PeriodLabel} · {members} · {days}";
+    }
+
+    private bool IsCurrentMonth => selectedYear == Today.Year && selectedMonth == Today.Month;
+
+    private static DateTime Today => DateTime.Today;
+
+
+
+    private IEnumerable<HoursReportUserRow> DisplayUsers =>
+
+        reportData?.Users
+
+            .OrderBy(u => GetUserCompliancePercent(u.UserId))
+
+            .ThenBy(u => u.UserName)
+
+        ?? Enumerable.Empty<HoursReportUserRow>();
+
+
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+
+    {
+
+        var relative = Navigation.ToBaseRelativePath(Navigation.Uri).TrimStart('/');
+
+        if (relative.Equals("hours-report", StringComparison.OrdinalIgnoreCase))
+
+            Navigation.NavigateTo(AppRoutes.ControlRegistroHoras, replace: true);
+
+        context = await session!.GetStorage<Context>("session") ?? new();
+
+        var today = DateTime.Today;
+
+        selectedYear = today.Year;
+
+        selectedMonth = today.Month;
+
+        await LoadDataAsync();
+
+    }
+
+
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+
+    {
+
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    }
+
+
+
+    private async System.Threading.Tasks.Task LoadDataAsync()
+
+    {
+
+        loading = true;
+
+        loadError = null;
+
+        StateHasChanged();
+
+
+
+        var response = hoursReportEngine.Execute(new HoursReportReadRequest
+
+        {
+
+            Context = context,
+
+            Year = selectedYear,
+
+            Month = selectedMonth
+
+        });
+
+
+
+        loading = false;
+
+        if (!response.Success || response.Data == null)
+
+        {
+
+            reportData = null;
+
+            loadError = response.Message?.Description ?? "No se pudo cargar el reporte.";
+
+            await InvokeAsync(StateHasChanged);
+
+            return;
+
+        }
+
+
+
+        reportData = response.Data;
+
+        await InvokeAsync(StateHasChanged);
+
+    }
+
+
+
+    private bool HasHours(long userId, DateTime date) =>
+
+        reportData?.LoggedDays.Contains((userId, date.Date)) == true;
+
+
+
+    private bool IsAbsent(long userId, DateTime date) =>
+
+        reportData?.AbsentDays.Contains((userId, date.Date)) == true;
+
+
+
+    private static bool IsMissingPastDay(HoursReportDayColumn day, bool hasHours, bool isAbsent) =>
+
+        !hasHours && !isAbsent && day.Date.Date < Today;
+
+
+
+    private int GetEvaluableDaysCount(long userId) =>
+
+        reportData?.Days.Count(d => d.Date.Date < Today && !IsAbsent(userId, d.Date)) ?? 0;
+
+
+
+    private int GetUserLoggedDaysCount(long userId) =>
+
+        reportData?.Days.Count(d => d.Date.Date < Today && HasHours(userId, d.Date)) ?? 0;
+
+
+
+    private int GetUserCompliancePercent(long userId)
+
+    {
+
+        var evaluable = GetEvaluableDaysCount(userId);
+
+        if (evaluable == 0) return 100;
+
+        return (int)Math.Round(GetUserLoggedDaysCount(userId) * 100.0 / evaluable);
+
+    }
+
+
+
+    private string GetUserComplianceClass(long userId)
+
+    {
+
+        var percent = GetUserCompliancePercent(userId);
+
+        var baseClass = "inline-flex min-w-[2.25rem] justify-center rounded px-1 py-0.5 text-[0.65rem] font-semibold tabular-nums ";
+
+        return percent switch
+
+        {
+
+            >= 90 => baseClass + "bg-green-50 text-green-700",
+
+            >= 70 => baseClass + "bg-amber-50 text-amber-700",
+
+            _ => baseClass + "bg-red-50 text-red-700"
+
+        };
+
+    }
+
+
+
+    private static string GetComplianceBarClass(int percent) => percent switch
+
+    {
+
+        >= 90 => "bg-green-500",
+
+        >= 70 => "bg-amber-500",
+
+        _ => "bg-red-500"
+
+    };
+
+
+
+    private static string GetDayHeaderClass(HoursReportDayColumn day)
+
+    {
+
+        var baseClass = "hours-report-day-head border-l border-gray-200 px-0 py-2 text-center align-middle ";
+
+        if (day.Date.Date == Today)
+
+            return baseClass + "bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-200";
+
+        if (day.IsWeekend)
+
+            return baseClass + "bg-slate-100/80 text-gray-500";
+
+        return baseClass + "bg-gray-50 text-gray-600";
+
+    }
+
+
+
+    private static string GetDayCellClass(HoursReportDayColumn day)
+
+    {
+
+        var baseClass = "border-l border-gray-100 px-0 text-center align-middle ";
+
+        if (day.Date.Date == Today)
+
+            return baseClass + "bg-primary-50/20";
+
+        if (day.IsWeekend)
+
+            return baseClass + "bg-slate-50/40";
+
+        return baseClass;
+
+    }
+
+
+
+    private string GetDayCellTitle(long userId, HoursReportDayColumn day, bool hasHours, bool isAbsent, bool isMissingPastDay)
+
+    {
+
+        if (hasHours) return "Horas registradas";
+
+        if (isAbsent) return $"Ausente ({GetAbsenceTypeLabel(userId, day.Date)})";
+
+        if (isMissingPastDay) return "Sin horas (día ya pasado)";
+
+        if (day.Date.Date == Today) return "Hoy — aún sin registro";
+
+        return "Sin registro";
+
+    }
+
+
+
+    private static string GetDayStatusClass(bool hasHours, bool isAbsent, bool isMissingPastDay)
+
+    {
+
+        const string baseClass = "hours-report-status ";
+
+        if (hasHours) return baseClass + "hours-report-status--ok";
+
+        if (isAbsent) return baseClass + "hours-report-status--absent";
+
+        if (isMissingPastDay) return baseClass + "hours-report-status--missing";
+
+        return baseClass + "hours-report-status--pending";
+
+    }
+
+
+
+    private static string GetDayStatusSymbol(bool hasHours, bool isAbsent, bool isMissingPastDay)
+
+    {
+
+        if (hasHours) return "✓";
+
+        if (isAbsent) return "—";
+
+        if (isMissingPastDay) return "✕";
+
+        return "·";
+
+    }
+
+
+
+    private string GetAbsenceTypeLabel(long userId, DateTime date)
+
+    {
+
+        if (reportData?.AbsentDayTypes.TryGetValue((userId, date.Date), out var type) == true)
+
+        {
+
+            return type == (short)UserTimeOffType.Vacation ? "Vacaciones" : "Permiso";
+
+        }
+
+
+
+        return "Ausencia registrada";
+
+    }
+
+
+
+    private async System.Threading.Tasks.Task OnMonthChange(ChangeEventArgs e)
+
+    {
+
+        if (!TryParseMonthValue(e.Value?.ToString(), out var year, out var month))
+
+            return;
+
+
+
+        await SetSelectedMonthAsync(year, month);
+
+    }
+
+
+
+    private async System.Threading.Tasks.Task GoToPreviousMonth()
+
+    {
+
+        var date = new DateTime(selectedYear, selectedMonth, 1).AddMonths(-1);
+
+        await SetSelectedMonthAsync(date.Year, date.Month);
+
+    }
+
+
+
+    private async System.Threading.Tasks.Task GoToNextMonth()
+
+    {
+
+        if (IsCurrentMonth)
+
+            return;
+
+
+
+        var date = new DateTime(selectedYear, selectedMonth, 1).AddMonths(1);
+
+        await SetSelectedMonthAsync(date.Year, date.Month);
+
+    }
+
+
+
+    private async System.Threading.Tasks.Task SetSelectedMonthAsync(int year, int month)
+
+    {
+
+        var selected = new DateTime(year, month, 1);
+
+        var current = new DateTime(Today.Year, Today.Month, 1);
+
+        if (selected > current)
+
+            return;
+
+
+
+        selectedYear = year;
+
+        selectedMonth = month;
+
+        await LoadDataAsync();
+
+    }
+
+
+
+    private static bool TryParseMonthValue(string? value, out int year, out int month)
+
+    {
+
+        year = 0;
+
+        month = 0;
+
+        if (string.IsNullOrWhiteSpace(value) || value.Length < 7)
+
+            return false;
+
+
+
+        return int.TryParse(value[..4], out year)
+
+            && int.TryParse(value[5..], out month)
+
+            && month is >= 1 and <= 12;
+
+    }
+
+}
+
+

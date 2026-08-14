@@ -1,0 +1,264 @@
+@typeparam TItem where TItem : GestionProyectos.Data.Entities.AuditBaseEntity, GestionProyectos.Data.Entities.IDescribable, new()
+@inject IJSRuntime JSRuntime
+@inject ICatalogEngine catalogEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Shared.Message
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="@PermissionPage">
+        <PageHeader Title="@Title" Subtitle="Mantenimiento de catálogo.">
+            <Actions>
+                @if (perms.CanCreate)
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="StartCreate" disabled="@creating">
+                        <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                    </button>
+                }
+                <input type="text" class="@Tw.FilterInput" @bind-value="searchInput" placeholder="Buscar..." @bind-value:event="oninput" />
+                <TableRefreshButton OnClick="Load" />
+            </Actions>
+        </PageHeader>
+
+        <div class="@Tw.TableWrapContained">
+            <table class="@Tw.Table">
+                <colgroup>
+                    <col class="w-14" />
+                    @if (HasOrder) { <col class="w-20" /> }
+                    <col />
+                    <col class="w-28" />
+                </colgroup>
+                <thead>
+                    <tr>
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyView">Id</SortableTh>
+                        @if (HasOrder)
+                        {
+                            <SortableTh Column="Order" State="tableState" OnSorted="ApplyView" CssClass="w-20">Orden</SortableTh>
+                        }
+                        <SortableTh Column="Description" State="tableState" OnSorted="ApplyView">Descripción</SortableTh>
+                        <th class="@Tw.ThActionsAuto"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (creating && perms.CanCreate)
+                    {
+                        <tr>
+                            <td class="@Tw.Td text-gray-400">Nuevo</td>
+                            @if (HasOrder)
+                            {
+                                <td class="@Tw.TdEdit"><input type="number" class="@Tw.TableInput w-20" @bind="newOrder" min="1" /></td>
+                            }
+                            <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newDescription" placeholder="Descripción" /></td>
+                            <td class="@Tw.TdActionsAuto">
+                                <div class="@Tw.TableActions">
+                                    <button type="button" class="@Tw.TableBtn" @onclick="Create">Guardar</button>
+                                    <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+
+                    @if (displayItems.Count == 0 && !creating)
+                    {
+                        <tr><td colspan="@(HasOrder ? 4 : 3)" class="@Tw.Td text-center text-gray-400">No hay registros</td></tr>
+                    }
+
+                    @foreach (var item in displayItems)
+                    {
+                        <tr class="hover:bg-gray-50">
+                            <td class="@Tw.Td">@item.Id</td>
+                            @if (editingId == item.Id && perms.CanEdit)
+                            {
+                                @if (HasOrder)
+                                {
+                                    <td class="@Tw.TdEdit"><input type="number" class="@Tw.TableInput w-20" @bind="editOrder" min="1" /></td>
+                                }
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="editDescription" /></td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="() => Update(item.Id)">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                    </div>
+                                </td>
+                            }
+                            else
+                            {
+                                @if (HasOrder)
+                                {
+                                    <td class="@Tw.Td">@GetOrder(item)</td>
+                                }
+                                <td class="@Tw.TdText" title="@item.Description">@item.Description</td>
+                                <td class="@Tw.TdActionsAuto">
+                                    @if (perms.CanEdit || perms.CanDelete)
+                                    {
+                                        <TableRowActionsMenu>
+                                            @if (perms.CanEdit)
+                                            {
+                                                <TableRowAction Label="Editar" OnClick="@(() => StartEdit(item))" />
+                                            }
+                                            @if (perms.CanDelete)
+                                            {
+                                                <TableRowAction Label="Eliminar" Danger OnClick="@(() => Delete(item.Id))" />
+                                            }
+                                        </TableRowActionsMenu>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyView" />
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Catálogo";
+    [Parameter] public string PermissionPage { get; set; } = "";
+    [Parameter] public bool HasOrder { get; set; }
+
+    private List<TItem> allItems = new();
+    private List<TItem> displayItems = new();
+    private readonly PagedTableState tableState = new() { SortColumn = "Order", SortAscending = true };
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private bool creating;
+    private string newDescription = string.Empty;
+    private int newOrder = 1;
+    private long editingId;
+    private string editDescription = string.Empty;
+    private int editOrder = 1;
+    private string? searchText;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        if (!HasOrder)
+            tableState.SortColumn = "Id";
+
+        context = await session!.GetStorage<Context>("session") ?? new();
+        if (!string.IsNullOrWhiteSpace(PermissionPage))
+            perms = PermissionHelper.Resolve(context, PermissionPage);
+        Load();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private void Load()
+    {
+        var response = catalogEngine.GetCatalog<TItem>();
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        allItems = response.Data ?? new List<TItem>();
+        tableState.ResetPage();
+        ApplyView();
+    }
+
+    private void ApplyView()
+    {
+        IEnumerable<TItem> query = allItems;
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText.ToLower();
+            query = query.Where(x => HasOrder
+                ? TableSearch.Matches(s, x.Id.ToString(), GetOrder(x).ToString(), x.Description)
+                : TableSearch.Matches(s, x.Id.ToString(), x.Description));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Order" when HasOrder => tableState.SortAscending
+                ? query.OrderBy(x => GetOrder(x))
+                : query.OrderByDescending(x => GetOrder(x)),
+            "Description" => tableState.SortAscending ? query.OrderBy(x => x.Description) : query.OrderByDescending(x => x.Description),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        var list = query.ToList();
+        tableState.SetPageCount(list.Count);
+        displayItems = tableState.Paginate(list).ToList();
+    }
+
+    private void StartCreate()
+    {
+        if (!perms.CanCreate) return;
+        creating = true;
+        editingId = 0;
+        newDescription = string.Empty;
+        newOrder = allItems.Count == 0 ? 1 : allItems.Max(GetOrder) + 1;
+    }
+
+    private void StartEdit(TItem item)
+    {
+        if (!perms.CanEdit) return;
+        creating = false;
+        editingId = item.Id;
+        editDescription = item.Description;
+        editOrder = GetOrder(item);
+    }
+
+    private void Cancel()
+    {
+        creating = false;
+        editingId = 0;
+        newDescription = string.Empty;
+        editDescription = string.Empty;
+        newOrder = 1;
+        editOrder = 1;
+    }
+
+    private void Create()
+    {
+        if (!perms.CanCreate) return;
+        var response = HasOrder
+            ? SaveWithOrder(0, newDescription, newOrder)
+            : catalogEngine.SaveCatalog<TItem>(0, newDescription, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel(); Load();
+    }
+
+    private void Update(long id)
+    {
+        if (!perms.CanEdit) return;
+        var response = HasOrder
+            ? SaveWithOrder(id, editDescription, editOrder)
+            : catalogEngine.SaveCatalog<TItem>(id, editDescription, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel(); Load();
+    }
+
+    private OperationResult<bool> SaveWithOrder(long id, string description, int order) =>
+        catalogEngine.SaveCatalog<TItem>(id, description, context, order);
+
+    private static int GetOrder(TItem item) => item is IOrderable orderable ? orderable.Order : 0;
+
+    private void Delete(long id)
+    {
+        if (!perms.CanDelete) return;
+        var response = catalogEngine.DeleteCatalog<TItem>(id, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Load();
+    }
+
+    private string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+}

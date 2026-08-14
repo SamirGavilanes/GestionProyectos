@@ -1,0 +1,138 @@
+﻿@inject NavigationManager Navigation
+
+@inject AuthenticationStateProvider authenticationProvider
+
+@inject IJSRuntime JSRuntime
+
+
+
+@using GestionProyectos.Server.Extensions
+
+
+
+<div class="relative ml-auto">
+
+    @if (menuOpen)
+
+    {
+
+        <button type="button" class="fixed inset-0 z-40 cursor-default" aria-label="Cerrar menú" @onclick="Close"></button>
+
+    }
+
+    <button type="button"
+            class="@Tw.TopBarUserButton"
+            @onclick="Toggle"
+            aria-expanded="@menuOpen"
+            aria-haspopup="true">
+        <span class="hidden max-w-[5.5rem] truncate text-white/75 sm:inline" title="@RoleName">@RoleName</span>
+        <span class="hidden h-3 w-px shrink-0 bg-white/20 sm:block" aria-hidden="true"></span>
+        <span class="@Tw.TopBarUserAvatar overflow-hidden">
+
+            @if (!string.IsNullOrWhiteSpace(AvatarDataUrl))
+
+            {
+
+                <img src="@AvatarDataUrl" alt="" class="h-full w-full object-cover" />
+
+            }
+
+            else
+
+            {
+
+                <span class="text-xs font-bold uppercase leading-none text-white">@UserDisplayHelper.GetInitials(UserName)</span>
+
+            }
+
+        </span>
+
+        <span class="hidden truncate font-medium text-white/95 sm:inline">@UserName</span>
+
+        <LucideIcon Name="chevron-down" CssClass="h-3 w-3 shrink-0 text-white/60" />
+
+    </button>
+
+
+
+    @if (menuOpen)
+
+    {
+
+        <div class="absolute right-0 z-50 mt-0.5 w-44 overflow-hidden rounded-md border border-gray-200 bg-white py-0.5 shadow-lg">
+            <button type="button"
+                    class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs text-gray-700 hover:bg-gray-50"
+                    @onclick="GoProfile">
+                <LucideIcon Name="user-round" CssClass="h-3 w-3 text-gray-500" />
+                Editar perfil
+            </button>
+            <button type="button"
+
+                    class="flex w-full items-center gap-1.5 border-t border-gray-100 px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-50"
+
+                    @onclick="LogOut">
+
+                <LucideIcon Name="log-out" CssClass="h-3 w-3" />
+
+                Cerrar sesión
+
+            </button>
+
+        </div>
+
+    }
+
+</div>
+
+
+
+@code {
+
+    [Parameter] public string UserName { get; set; } = "Usuario";
+
+    [Parameter] public string RoleName { get; set; } = "—";
+
+    [Parameter] public string? AvatarDataUrl { get; set; }
+
+    [Parameter] public EventCallback OnLogout { get; set; }
+
+
+
+    private bool menuOpen;
+
+
+
+    private void Toggle() => menuOpen = !menuOpen;
+
+    private void Close() => menuOpen = false;
+
+
+
+    private void GoProfile()
+    {
+        menuOpen = false;
+        Navigation.NavigateTo("/profile");
+    }
+
+    private async System.Threading.Tasks.Task LogOut()
+
+    {
+
+        menuOpen = false;
+
+        await OnLogout.InvokeAsync();
+
+    }
+
+
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+
+    {
+
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    }
+
+}
+

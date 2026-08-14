@@ -1,0 +1,825 @@
+@page "/task-management/import"
+
+@inject IJSRuntime JSRuntime
+
+@inject ICatalogEngine catalogEngine
+
+@inject ITaskCreationEngine taskCreationEngine
+
+@inject ISessionStorageService session
+
+
+
+@using System.Globalization
+
+@using Blazored.SessionStorage
+
+@using GestionProyectos.Data.Entities.TaskManagement
+
+@using GestionProyectos.Engine.Catalog
+
+@using GestionProyectos.Engine.Catalog.Request
+
+@using GestionProyectos.Engine.Feature.Task.TaskCreation
+
+@using GestionProyectos.Engine.Feature.Task.TaskCreation.Request
+
+@using GestionProyectos.Engine.Security.Utilities
+
+@using GestionProyectos.Server.Extensions
+
+@using Microsoft.AspNetCore.Components.Authorization
+
+@using Microsoft.AspNetCore.WebUtilities
+
+
+
+@attribute [Authorize]
+
+
+
+<AuthorizeView Context="sessionContext">
+
+    <Authorized>
+
+        @if (!allowed)
+
+        {
+
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+
+                No tiene permiso para importar tareas.
+
+            </div>
+
+        }
+
+        else
+
+        {
+
+            <PageHeader Title="Importación masiva de tareas"
+
+                        Subtitle="Copie filas desde Excel y péguelas en el cuadro de texto (Ctrl+V).">
+
+                <Actions>
+
+                    <input type="text" class="@Tw.FilterInput" @bind-value="searchInput" placeholder="Buscar..." @bind-value:event="oninput" />
+
+                    <TableRefreshButton OnClick="ParsePaste" />
+
+                    <button type="button" class="@Tw.BtnOutline" @onclick="GoBack">Volver</button>
+
+                </Actions>
+
+            </PageHeader>
+
+
+
+            <div class="max-w-5xl space-y-3">
+
+                <div class="@Tw.FormCard">
+                    <div class="@Tw.FormGridSm">
+                        <div>
+                            <label class="@Tw.FormLabel">Empresa</label>
+                            <select class="@Tw.FormSelect" value="@enterpriseId" @onchange="OnEnterpriseChange">
+                                <option value="0">-- Seleccione --</option>
+                                @foreach (var item in enterprises)
+                                {
+                                    <option value="@item.Id">@item.Description</option>
+                                }
+                            </select>
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Cliente</label>
+                            <select class="@Tw.FormSelect" value="@customerId" @onchange="OnCustomerChange" disabled="@(enterpriseId == 0)">
+                                <option value="0">-- Seleccione --</option>
+                                @foreach (var item in customers)
+                                {
+                                    <option value="@item.Id">@item.Description</option>
+                                }
+                            </select>
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Proyecto</label>
+                            <select class="@Tw.FormSelect" value="@projectId" @onchange="OnProjectChange" disabled="@(customerId == 0)">
+                                <option value="0">-- Seleccione --</option>
+                                @foreach (var item in projects)
+                                {
+                                    <option value="@item.Id">@item.Description</option>
+                                }
+                            </select>
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Requerimiento</label>
+                            <select class="@Tw.FormSelect" @bind="ticketId" disabled="@(projectId == 0)">
+                                <option value="0">-- Seleccione --</option>
+                                @foreach (var ticket in tickets)
+                                {
+                                    <option value="@ticket.Id">@ticket.Id - @ticket.Description</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+
+                    <p class="font-medium text-gray-700">Formato esperado (2 columnas):</p>
+
+                    <p class="mt-1 font-mono">Descripción &nbsp;|&nbsp; Horas estimadas</p>
+
+                    <p class="mt-1">Separadores: tabulación (Excel), <span class="font-mono">|</span>, <span class="font-mono">/</span> o <span class="font-mono">-</span></p>
+
+                    <p class="mt-1">Ejemplo: <span class="font-mono">Desarrollo de pantalla - 4</span></p>
+
+                </div>
+
+
+
+                <div>
+
+                    <label class="@Tw.Label">Datos pegados desde Excel</label>
+
+                    <textarea class="@Tw.Textarea min-h-[400px] font-mono text-xs"
+                              rows="18"
+                              @bind="pasteText"
+                              placeholder="Seleccione las filas en Excel (sin encabezado o con encabezado) y pegue aquí..."></textarea>
+
+                </div>
+
+
+
+                <div class="flex gap-2">
+
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="ParsePaste">Vista previa</button>
+
+                    @if (parsedRows.Count > 0 && validRows.Count > 0)
+
+                    {
+
+                        <button type="button" class="@Tw.BtnPrimary" disabled="@importing" @onclick="ImportRows">
+
+                            @(importing ? "Importando..." : $"Importar {validRows.Count} tarea(s)")
+
+                        </button>
+
+                    }
+
+                </div>
+
+
+
+                @if (parsedRows.Count > 0)
+
+                {
+
+                    <div class="@Tw.TableWrap">
+
+                        <table class="@Tw.Table">
+                            <colgroup>
+                                <col class="w-10" />
+                                <col />
+                                <col class="w-20" />
+                                <col class="w-36" />
+                            </colgroup>
+                            <thead>
+
+                                <tr>
+
+                                    <SortableTh Column="LineNumber" State="tableState" OnSorted="ApplyView" CssClass="w-10">#</SortableTh>
+
+                                    <SortableTh Column="Description" State="tableState" OnSorted="ApplyView">Descripción</SortableTh>
+
+                                    <SortableTh Column="TimeEstimationHours" State="tableState" OnSorted="ApplyView" CssClass="w-20 text-right">Horas est.</SortableTh>
+
+                                    <SortableTh Column="Status" State="tableState" OnSorted="ApplyView">Estado</SortableTh>
+
+                                </tr>
+
+                            </thead>
+
+                            <tbody>
+
+                                @foreach (var row in displayRows)
+
+                                {
+
+                                    <tr class="@(row.IsValid ? "hover:bg-gray-50" : "bg-red-50")">
+
+                                        <td class="@Tw.Td w-10">@row.LineNumber</td>
+
+                                        <td class="@Tw.TdText" title="@row.Description">@(string.IsNullOrWhiteSpace(row.Description) ? "—" : row.Description)</td>
+
+                                        <td class="@Tw.Td w-20 text-right">@(row.TimeEstimationHours > 0 ? row.TimeEstimationHours.ToString(CultureInfo.InvariantCulture) : "—")</td>
+
+                                        <td class="@Tw.TdText w-36 @(row.IsValid ? "text-green-700" : "text-red-700")" title="@row.Status">@row.Status</td>
+
+                                    </tr>
+
+                                }
+
+                            </tbody>
+
+                        </table>
+
+                    </div>
+
+                    <TablePagination State="tableState" ItemLabel="filas" OnPageChanged="ApplyView" />
+
+                }
+
+            </div>
+
+        }
+
+    </Authorized>
+
+</AuthorizeView>
+
+
+
+@code {
+
+    [Inject] NavigationManager NavigationManager { get; set; } = default!;
+
+
+
+    private string pasteText = string.Empty;
+
+    private bool importing;
+
+    private bool allowed;
+
+    private Context context = new();
+
+    private PagePermissions perms = PagePermissions.Full;
+
+
+
+    private DateTime startDate = DateTime.Today;
+
+    private DateTime endDate = DateTime.Today;
+
+    private long enterpriseId;
+
+    private long customerId;
+
+    private long projectId;
+
+    private long ticketId;
+
+
+
+    private List<Enterprise> enterprises = new();
+
+    private List<Customer> allCustomers = new();
+
+    private List<Project> allProjects = new();
+
+    private List<Customer> customers = new();
+
+    private List<Project> projects = new();
+
+    private List<Requirement> tickets = new();
+
+    private HashSet<long> closedRequirementStatusIds = new();
+
+    private List<ImportRow> parsedRows = new();
+
+    private List<ImportRow> displayRows = new();
+
+    private readonly PagedTableState tableState = new();
+
+    private string? searchText;
+
+    private List<ImportRow> validRows => parsedRows.Where(r => r.IsValid).ToList();
+
+
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+
+    {
+
+        context = await session!.GetStorage<Context>("session") ?? new();
+
+        perms = PermissionHelper.Resolve(context, "/task-management");
+
+        allowed = perms.CanView && perms.CanCreate;
+
+
+
+        var uri = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+
+        var query = QueryHelpers.ParseQuery(uri.Query);
+
+
+
+        if (query.TryGetValue("start", out var startVal) && DateTime.TryParse(startVal, out var start))
+
+            startDate = start.Date;
+
+        if (query.TryGetValue("end", out var endVal) && DateTime.TryParse(endVal, out var end))
+
+            endDate = end.Date;
+
+
+
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+
+        allCustomers = catalogEngine.GetCustomers().Data ?? new();
+
+        allProjects = catalogEngine.GetProjects().Data ?? new();
+
+        closedRequirementStatusIds = (catalogEngine.GetRequirementStatuses().Data ?? new())
+
+            .Where(s => s.IsClosed)
+
+            .Select(s => s.Id)
+
+            .ToHashSet();
+
+    }
+
+
+
+    private void OnEnterpriseChange(ChangeEventArgs e)
+
+    {
+
+        enterpriseId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+
+        customerId = projectId = ticketId = 0;
+
+        RefreshCustomers();
+
+        projects = new();
+
+        tickets = new();
+
+    }
+
+
+
+    private void OnCustomerChange(ChangeEventArgs e)
+
+    {
+
+        customerId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+
+        projectId = ticketId = 0;
+
+        RefreshProjects();
+
+        tickets = new();
+
+    }
+
+
+
+    private void OnProjectChange(ChangeEventArgs e)
+
+    {
+
+        projectId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+
+        ticketId = 0;
+
+        RefreshTickets();
+
+    }
+
+
+
+    private void RefreshCustomers() =>
+
+        customers = enterpriseId > 0
+
+            ? allCustomers.Where(c => c.EnterpriseId == enterpriseId).ToList()
+
+            : new();
+
+
+
+    private void RefreshProjects() =>
+
+        projects = customerId > 0
+
+            ? allProjects.Where(p => p.CustomerId == customerId).ToList()
+
+            : new();
+
+
+
+    private void RefreshTickets() =>
+
+        tickets = projectId > 0
+
+            ? (catalogEngine.GetTickets(new GetTicketRequest { ProjectId = projectId }).Data ?? new())
+
+                .Where(t => !closedRequirementStatusIds.Contains(t.RequirementStatusId))
+
+                .OrderByDescending(t => t.Id)
+
+                .ToList()
+
+            : new();
+
+
+
+    private void ParsePaste()
+
+    {
+
+        parsedRows.Clear();
+
+        if (ticketId <= 0)
+
+        {
+
+            JSRuntime.InvokeVoidAsync("alert", "Seleccione empresa, cliente, proyecto y requerimiento.");
+
+            return;
+
+        }
+
+
+
+        if (string.IsNullOrWhiteSpace(pasteText))
+
+        {
+
+            JSRuntime.InvokeVoidAsync("alert", "Pegue los datos de Excel en el cuadro de texto.");
+
+            return;
+
+        }
+
+
+
+        var lines = pasteText.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+        var lineNumber = 0;
+
+
+
+        foreach (var rawLine in lines)
+
+        {
+
+            lineNumber++;
+
+            var line = rawLine.Trim();
+
+            if (string.IsNullOrEmpty(line)) continue;
+
+
+
+            var cols = SplitColumns(line);
+
+            if (cols.Length < 2)
+
+            {
+
+                parsedRows.Add(new ImportRow
+
+                {
+
+                    LineNumber = lineNumber,
+
+                    Status = "Se esperan 2 columnas (Descripción, Horas estimadas)."
+
+                });
+
+                continue;
+
+            }
+
+
+
+            if (lineNumber == 1 && IsHeaderRow(cols))
+
+                continue;
+
+
+
+            var row = new ImportRow { LineNumber = lineNumber, TicketId = ticketId };
+
+            var errors = new List<string>();
+
+
+
+            row.Description = cols[0].Trim();
+
+            if (string.IsNullOrWhiteSpace(row.Description))
+
+                errors.Add("Descripción requerida");
+
+
+
+            if (!TryParseHours(cols[1].Trim(), out var hours) || hours <= 0)
+
+                errors.Add("Horas estimadas inválidas");
+
+            else
+
+                row.TimeEstimationHours = hours;
+
+
+
+            row.Status = errors.Count == 0 ? "OK" : string.Join("; ", errors);
+
+            parsedRows.Add(row);
+
+        }
+
+
+
+        if (parsedRows.Count == 0)
+
+            JSRuntime.InvokeVoidAsync("alert", "No se detectaron filas válidas para importar.");
+
+        else
+
+        {
+
+            tableState.ResetPage();
+
+            ApplyView();
+
+        }
+
+    }
+
+
+
+    private void ApplyView()
+
+    {
+
+        IEnumerable<ImportRow> query = parsedRows;
+
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+
+        {
+
+            var s = tableState.SearchText;
+
+            query = query.Where(r => TableSearch.Matches(s,
+
+                r.LineNumber.ToString(),
+
+                r.Description,
+
+                r.TimeEstimationHours > 0 ? r.TimeEstimationHours.ToString(CultureInfo.InvariantCulture) : string.Empty,
+
+                r.Status));
+
+        }
+
+
+
+        query = tableState.SortColumn switch
+
+        {
+
+            "Description" => tableState.SortAscending ? query.OrderBy(x => x.Description) : query.OrderByDescending(x => x.Description),
+
+            "TimeEstimationHours" => tableState.SortAscending ? query.OrderBy(x => x.TimeEstimationHours) : query.OrderByDescending(x => x.TimeEstimationHours),
+
+            "Status" => tableState.SortAscending ? query.OrderBy(x => x.Status) : query.OrderByDescending(x => x.Status),
+
+            _ => tableState.SortAscending ? query.OrderBy(x => x.LineNumber) : query.OrderByDescending(x => x.LineNumber)
+
+        };
+
+
+
+        var list = query.ToList();
+
+        tableState.SetPageCount(list.Count);
+
+        displayRows = tableState.Paginate(list).ToList();
+
+    }
+
+
+
+    private string searchInput
+
+    {
+
+        get => searchText ?? string.Empty;
+
+        set
+
+        {
+
+            searchText = value;
+
+            tableState.SearchText = value;
+
+            tableState.ResetPage();
+
+            ApplyView();
+
+        }
+
+    }
+
+
+
+    private async System.Threading.Tasks.Task ImportRows()
+
+    {
+
+        if (ticketId <= 0)
+
+        {
+
+            await JSRuntime.InvokeVoidAsync("alert", "Seleccione un requerimiento antes de importar.");
+
+            return;
+
+        }
+
+
+
+        var rowsToImport = parsedRows.Where(r => r.IsValid).ToList();
+
+        if (rowsToImport.Count == 0) return;
+
+
+
+        importing = true;
+
+        var imported = 0;
+
+        var failed = new List<string>();
+
+
+
+        try
+
+        {
+
+            foreach (var row in rowsToImport)
+
+            {
+
+                var response = taskCreationEngine.Execute(new TaskCreationRequest
+
+                {
+
+                    TicketId = ticketId,
+
+                    Description = row.Description,
+
+                    TimeEstimationHours = row.TimeEstimationHours,
+
+                    UserId = context.UserId > 0 ? context.UserId : 0,
+
+                    Context = context
+
+                });
+
+
+
+                if (response.Success)
+
+                    imported++;
+
+                else
+
+                    failed.Add($"Fila {row.LineNumber}: {response.Message.Description}");
+
+            }
+
+        }
+
+        finally
+
+        {
+
+            importing = false;
+
+        }
+
+
+
+        if (failed.Count > 0)
+
+        {
+
+            await JSRuntime.InvokeVoidAsync("alert",
+
+                $"Importadas: {imported}. Errores ({failed.Count}):\n" + string.Join("\n", failed.Take(5)));
+
+            return;
+
+        }
+
+
+
+        if (imported == 0)
+
+        {
+
+            await JSRuntime.InvokeVoidAsync("alert", "No se importó ninguna tarea.");
+
+            return;
+
+        }
+
+
+
+        await JSRuntime.InvokeVoidAsync("alert", $"Se importaron {imported} tarea(s) correctamente.");
+
+        GoBack();
+
+    }
+
+
+
+    private void GoBack()
+
+    {
+
+        var query = $"?start={startDate:yyyy-MM-dd}&end={endDate:yyyy-MM-dd}&enterpriseId={enterpriseId}&customerId={customerId}&projectId={projectId}&requirementId={ticketId}";
+
+        NavigationManager.NavigateTo($"/task-management{query}");
+
+    }
+
+
+
+    private static string[] SplitColumns(string line)
+    {
+        if (line.Contains('\t'))
+            return line.Split('\t', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var sep in new[] { "|", "/", "-" })
+        {
+            var idx = line.LastIndexOf(sep, StringComparison.Ordinal);
+            if (idx <= 0) continue;
+
+            var left = line[..idx].Trim();
+            var right = line[(idx + sep.Length)..].Trim();
+            if (!string.IsNullOrEmpty(left) && !string.IsNullOrEmpty(right))
+                return new[] { left, right };
+        }
+
+        return Array.Empty<string>();
+    }
+
+
+
+    private static bool IsHeaderRow(string[] cols)
+
+    {
+
+        var first = cols[0].Trim();
+
+        return first.Equals("Descripción", StringComparison.OrdinalIgnoreCase)
+
+            || first.Equals("Description", StringComparison.OrdinalIgnoreCase);
+
+    }
+
+
+
+    private static bool TryParseHours(string value, out decimal hours)
+
+    {
+
+        hours = 0;
+
+        value = value.Replace(',', '.').Trim();
+
+        return decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out hours);
+
+    }
+
+
+
+    private sealed class ImportRow
+
+    {
+
+        public int LineNumber { get; set; }
+
+        public long TicketId { get; set; }
+
+        public string Description { get; set; } = string.Empty;
+
+        public decimal TimeEstimationHours { get; set; }
+
+        public string Status { get; set; } = string.Empty;
+
+        public bool IsValid => Status == "OK";
+
+    }
+
+}
+
+

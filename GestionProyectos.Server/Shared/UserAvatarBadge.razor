@@ -1,0 +1,20 @@
+<span class="@($"inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary-100 text-primary-800 {SizeClass} {CssClass}")"
+      title="@UserName"
+      aria-hidden="true">
+    @if (!string.IsNullOrWhiteSpace(AvatarDataUrl))
+    {
+        <img src="@AvatarDataUrl" alt="" class="h-full w-full object-cover" />
+    }
+    else
+    {
+        <span class="@TextClass">@UserDisplayHelper.GetInitials(UserName)</span>
+    }
+</span>
+
+@code {
+    [Parameter] public string? UserName { get; set; }
+    [Parameter] public string? AvatarDataUrl { get; set; }
+    [Parameter] public string SizeClass { get; set; } = "h-7 w-7";
+    [Parameter] public string TextClass { get; set; } = "text-xs font-bold uppercase";
+    [Parameter] public string CssClass { get; set; } = string.Empty;
+}

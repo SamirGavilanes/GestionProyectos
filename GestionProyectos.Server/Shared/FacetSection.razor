@@ -1,0 +1,27 @@
+<div class="@Tw.FacetAccordion">
+    @if (!string.IsNullOrWhiteSpace(Title))
+    {
+        <button type="button" class="@Tw.FacetAccordionTrigger" @onclick="Toggle">
+            <span class="truncate">@Title</span>
+            <LucideIcon Name="@(IsOpen ? "minus" : "plus")" CssClass="h-3 w-3 shrink-0 text-gray-500" />
+        </button>
+    }
+    @if (IsOpen)
+    {
+        <div class="@Tw.FacetAccordionBody">
+            @ChildContent
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public bool DefaultOpen { get; set; } = true;
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool IsOpen;
+
+    protected override void OnInitialized() => IsOpen = DefaultOpen;
+
+    private void Toggle() => IsOpen = !IsOpen;
+}

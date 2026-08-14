@@ -1,0 +1,1006 @@
+@page "/create-requirement/{ticketId}"
+@inject IJSRuntime JSRuntime
+@inject ICatalogEngine catalogEngine
+@inject IRequirementCreateEngine ticketCreateEngine
+@inject IRequirementReadEngine ticketReadEngine
+@inject IRequirementUpdateEngine ticketUpdateEngine
+@inject IBacklogEngine backlogEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature.Requirement.Create
+@using GestionProyectos.Engine.Feature.Requirement.Create.Request
+@using GestionProyectos.Engine.Feature.Requirement.Read
+@using GestionProyectos.Engine.Feature.Requirement.Read.Request
+@using GestionProyectos.Engine.Feature.Requirement.Update
+@using GestionProyectos.Engine.Feature.Requirement.Update.Request
+@using GestionProyectos.Engine.Feature.Backlog
+@using GestionProyectos.Engine.Feature.Backlog.Request
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Engine.Feature
+@using GestionProyectos.Shared.Enums
+@using GestionProyectos.Shared.Models.UploadFile
+@using GestionProyectos.Engine.Feature.Requirement.Read.CommonObject
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.WebUtilities
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        @if (!allowed)
+        {
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                No tiene permiso para @(update ? "editar" : "crear") requerimientos.
+            </div>
+        }
+        else
+        {
+        <PageHeader Title="@PageTitle" Subtitle="@PageSubtitle">
+            <Actions>
+                @if (readOnly)
+                {
+                    <button type="button" class="@Tw.BtnOutline" @onclick="cancel">Volver</button>
+                }
+                else
+                {
+                    <button type="button" class="@Tw.BtnOutline" @onclick="cancel">Cancelar</button>
+                    @if (update && perms.CanEdit)
+                    {
+                        <button type="button" class="@Tw.BtnPrimary" @onclick="UpdateTicket">
+                            <LucideIcon Name="save" CssClass="h-3.5 w-3.5" /> Actualizar
+                        </button>
+                    }
+                    else if (!update && perms.CanCreate)
+                    {
+                        <button type="button" class="@Tw.BtnPrimary" @onclick="save">
+                            <LucideIcon Name="save" CssClass="h-3.5 w-3.5" /> Guardar
+                        </button>
+                    }
+                }
+            </Actions>
+        </PageHeader>
+
+        @if (update && allowed)
+        {
+            <div class="mb-4 flex flex-wrap items-center gap-2">
+                <span class="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">#@editingId</span>
+                @if (statusId > 0)
+                {
+                    var status = statuses.FirstOrDefault(s => s.Id == statusId);
+                    if (status != null)
+                    {
+                        <StatusBadge Label="@status.Description" Color="@status.BadgeColor" />
+                    }
+                }
+                @if (priorityId > 0)
+                {
+                    var priority = priorities.FirstOrDefault(p => p.Id == priorityId);
+                    if (priority != null)
+                    {
+                        <StatusBadge Label="@priority.Description" Color="@priority.BadgeColor" />
+                    }
+                }
+                <span class="@GetInitialScopeBadgeClass()">@GetInitialScopeLabel()</span>
+                <span class="@GetRequirementTypeBadgeClass()">@GetRequirementTypeLabel()</span>
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(formError))
+        {
+            <div class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">@formError</div>
+        }
+        @if (!string.IsNullOrWhiteSpace(fileError))
+        {
+            <div class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">@fileError</div>
+        }
+
+        <div class="@Tw.DetailLayout">
+            <div class="space-y-4 @Tw.DetailLayoutMainSpan8">
+                <section class="@Tw.Card">
+                    <h2 class="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <LucideIcon Name="file-text" CssClass="h-3.5 w-3.5 text-primary-600" />
+                        Descripción y alcance
+                    </h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="@Tw.FormLabel">Descripción</label>
+                            <textarea class="@FieldClass(descriptionError)" disabled="@readOnly" @bind="description" rows="4" placeholder="Resumen del requerimiento"></textarea>
+                            <FormFieldError Message="@descriptionError" />
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Alcance funcional</label>
+                            <div class="mb-1.5 flex items-center justify-between gap-2">
+                                <p class="text-xs text-gray-500">Se genera desde la historia de usuario; solo lectura.</p>
+                                @if (!readOnly)
+                                {
+                                    <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2 text-xs shrink-0")" @onclick="OpenScopeModal">
+                                        <LucideIcon Name="list-checks" CssClass="h-3.5 w-3.5" /> Historia de usuario
+                                    </button>
+                                }
+                            </div>
+                            <textarea class="@($"{FieldClass(scopeError)} bg-gray-50 text-gray-700")"
+                                      readonly
+                                      value="@scope"
+                                      rows="4"
+                                      placeholder="El alcance aparecerá aquí al completar la historia de usuario"></textarea>
+                            <FormFieldError Message="@scopeError" />
+                        </div>
+                        @foreach (var section in ScopeDetailSections)
+                        {
+                            <div>
+                                <div class="mb-1.5 flex items-center justify-between gap-2">
+                                    <label class="@Tw.FormLabel mb-0">@(section.Title)</label>
+                                    @if (!readOnly)
+                                    {
+                                        <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2 text-xs shrink-0")" @onclick="() => OpenDetailModal(section.Key)">
+                                            <LucideIcon Name="pencil" CssClass="h-3.5 w-3.5" /> Editar
+                                        </button>
+                                    }
+                                </div>
+                                <textarea class="@($"{Tw.FormInput} bg-gray-50 text-gray-700")"
+                                          readonly
+                                          value="@GetDetailValue(section.Key)"
+                                          rows="3"
+                                          placeholder="@(section.Placeholder)"></textarea>
+                            </div>
+                        }
+                    </div>
+                </section>
+
+                <section class="@Tw.Card">
+                    <h2 class="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <LucideIcon Name="user" CssClass="h-3.5 w-3.5 text-primary-600" />
+                        Solicitud
+                    </h2>
+                    <div class="@Tw.FormGrid">
+                        <div>
+                            <label class="@Tw.FormLabel">Solicitante</label>
+                            <input type="text" class="@FieldClass(requesterError)" disabled="@readOnly" @bind="requesterName" placeholder="Nombre de quien solicita" />
+                            <FormFieldError Message="@requesterError" />
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Fecha de solicitud</label>
+                            <input type="date" class="@Tw.FormDate" disabled="@readOnly" @bind="requestDate" />
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Nº ticket Freshdesk</label>
+                            <input type="text" class="@Tw.FormInput" disabled="@readOnly" @bind="freshDeskTicketNumber" placeholder="Opcional" />
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <label class="@Tw.FormLabel">Sistemas impactados</label>
+                        <textarea class="@FieldClass(impactedSystemsError)" disabled="@readOnly" @bind="impactedSystems" rows="2" placeholder="Indique los sistemas que serán impactados"></textarea>
+                        <FormFieldError Message="@impactedSystemsError" />
+                    </div>
+                </section>
+
+                <section class="@Tw.Card">
+                    <h2 class="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <LucideIcon Name="paperclip" CssClass="h-3.5 w-3.5 text-primary-600" />
+                        Archivos adjuntos
+                    </h2>
+                    @if (existingAttachments.Count > 0)
+                    {
+                        <ul class="mb-3 divide-y divide-gray-100 rounded-md border border-gray-200 bg-gray-50/50">
+                            @foreach (var file in existingAttachments)
+                            {
+                                <li class="flex items-center gap-2 px-3 py-2 text-xs text-gray-700">
+                                    <LucideIcon Name="file" CssClass="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                                    <span class="truncate">@file.FileName</span>
+                                </li>
+                            }
+                        </ul>
+                    }
+                    @if (!readOnly)
+                    {
+                        <p class="mb-2 text-xs text-gray-500">Puede adjuntar uno o varios archivos (máx. 512 KB c/u).</p>
+                        <InputFile OnChange="HandleFileChanged" multiple class="text-xs" />
+                        @if (selectedFiles.Count > 0)
+                        {
+                            <ul class="mt-2 divide-y divide-gray-100 rounded-md border border-gray-200">
+                                @foreach (var file in selectedFiles)
+                                {
+                                    <li class="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                                        <span class="flex min-w-0 items-center gap-2 text-gray-700">
+                                            <LucideIcon Name="file-plus" CssClass="h-3.5 w-3.5 shrink-0 text-primary-500" />
+                                            <span class="truncate">@file.Name</span>
+                                        </span>
+                                        <button type="button" class="shrink-0 text-xs text-red-600 hover:underline" @onclick="() => RemoveFile(file)">Quitar</button>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    }
+                    else if (existingAttachments.Count == 0)
+                    {
+                        <p class="text-xs text-gray-500">Sin archivos adjuntos.</p>
+                    }
+                    @if (update && existingAttachments.Count > 0)
+                    {
+                        <a class="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary-700 hover:underline" href="@($"/download-page/{editingId}")" target="_blank" rel="noopener">
+                            <LucideIcon Name="download" CssClass="h-3.5 w-3.5" /> Descargar adjuntos
+                        </a>
+                    }
+                </section>
+            </div>
+
+            <aside class="space-y-4 @Tw.DetailLayoutAsideSpan4">
+                <section class="@Tw.Card">
+                    <h2 class="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <LucideIcon Name="folder-tree" CssClass="h-3.5 w-3.5 text-primary-600" />
+                        Ubicación
+                    </h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="@Tw.FormLabel">Empresa</label>
+                            <select class="@Tw.FormSelect" disabled="@readOnly" @onchange="HandleEnterpriseChange">
+                                <option value="0">-- Todas --</option>
+                                @foreach (var item in enterprises)
+                                {
+                                    <option value="@item.Id" selected="@(item.Id == filterEnterpriseId)">@item.Description</option>
+                                }
+                            </select>
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Cliente</label>
+                            <select class="@Tw.FormSelect" disabled="@readOnly" @onchange="HandleCustomerChange">
+                                <option value="0">-- Todos --</option>
+                                @foreach (var item in filterCustomers)
+                                {
+                                    <option value="@item.Id" selected="@(item.Id == filterCustomerId)">@item.Description</option>
+                                }
+                            </select>
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Proyecto</label>
+                            <select class="@FieldClass(projectError)" disabled="@readOnly" @bind="projectId">
+                                <option value="0">-- Selecciona --</option>
+                                @foreach (var item in projects)
+                                {
+                                    <option value="@item.Id">@item.Description</option>
+                                }
+                            </select>
+                            <FormFieldError Message="@projectError" />
+                        </div>
+                    </div>
+                </section>
+
+                <section class="@Tw.Card">
+                    <h2 class="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <LucideIcon Name="tags" CssClass="h-3.5 w-3.5 text-primary-600" />
+                        Estado y prioridad
+                    </h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="@Tw.FormLabel">Estado</label>
+                            <select class="@FieldClass(statusError)" disabled="@readOnly" @bind="statusId">
+                                <option value="0">-- Selecciona --</option>
+                                @foreach (var item in GetSelectableRequirementStatuses())
+                                {
+                                    <option value="@item.Id">@item.Description</option>
+                                }
+                            </select>
+                            <FormFieldError Message="@statusError" />
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Prioridad</label>
+                            <select class="@FieldClass(priorityError)" disabled="@readOnly" @bind="priorityId">
+                                <option value="0">-- Selecciona --</option>
+                                @foreach (var item in priorities)
+                                {
+                                    <option value="@item.Id">@item.Description</option>
+                                }
+                            </select>
+                            <FormFieldError Message="@priorityError" />
+                        </div>
+                    </div>
+                </section>
+
+                <section class="@Tw.Card">
+                    <h2 class="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <LucideIcon Name="layers" CssClass="h-3.5 w-3.5 text-primary-600" />
+                        Clasificación
+                    </h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="@Tw.FormLabel">¿Dentro del alcance inicial?</label>
+                            <select class="@Tw.FormSelect" disabled="@readOnly" value="@BoolValue(isWithinScope)" @onchange="OnIsWithinScopeChange">
+                                <option value="true">Sí</option>
+                                <option value="false">No</option>
+                            </select>
+                        </div>
+                        @if (!isWithinScope)
+                        {
+                            <div>
+                                <label class="@Tw.FormLabel">Motivo fuera de alcance</label>
+                                <select class="@FieldClass(scopeReasonError)" disabled="@readOnly" @bind="scopeChangeReasonValue">
+                                    <option value="0">-- Selecciona --</option>
+                                    <option value="@((short)TaskScopeChangeReason.Internal)">Por nosotros</option>
+                                    <option value="@((short)TaskScopeChangeReason.External)">Externo</option>
+                                </select>
+                                <FormFieldError Message="@scopeReasonError" />
+                            </div>
+                        }
+                        <div>
+                            <label class="@Tw.FormLabel">Tipo de requerimiento</label>
+                            <select class="@Tw.FormSelect" disabled="@readOnly" value="@BoolValue(isProductionReprocess)" @onchange="OnRequirementTypeChange">
+                                <option value="false">Nuevo requerimiento</option>
+                                <option value="true">Reproceso por fallo en producción</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="@Tw.Card">
+                    <h2 class="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <LucideIcon Name="calendar" CssClass="h-3.5 w-3.5 text-primary-600" />
+                        Planificación
+                    </h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="@Tw.FormLabel">Fecha inicio</label>
+                            <input type="date" class="@Tw.FormDate w-full" disabled="@readOnly" @bind="startDate" />
+                        </div>
+                        <div>
+                            <label class="@Tw.FormLabel">Fecha fin planificada</label>
+                            <input type="date" class="@($"{FieldClass(endDateError)} w-full")" disabled="@readOnly" @bind="endDate" />
+                            <FormFieldError Message="@endDateError" />
+                        </div>
+                        @if (update)
+                        {
+                            <div>
+                                <label class="@Tw.FormLabel">Fecha fin real</label>
+                                <input type="date" class="@Tw.FormDate w-full" disabled="@readOnly" @bind="actualEndDate" />
+                            </div>
+                        }
+                    </div>
+                </section>
+            </aside>
+        </div>
+
+        @if (showScopeModal)
+        {
+            <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-3" @onclick="CloseScopeModal">
+                <div class="w-full max-w-lg rounded-lg border border-gray-200 bg-white shadow-lg" @onclick:stopPropagation="true">
+                    <div class="flex items-start justify-between gap-2 border-b border-gray-100 px-3 py-2">
+                        <div>
+                            <h3 class="text-xs font-semibold text-gray-900">Historia de usuario</h3>
+                            <p class="text-xs text-gray-500">Complete los campos para armar el alcance funcional.</p>
+                        </div>
+                        <button type="button" class="shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600" @onclick="CloseScopeModal" aria-label="Cerrar">
+                            <LucideIcon Name="x" CssClass="h-4 w-4" />
+                        </button>
+                    </div>
+                    <div class="space-y-3 px-3 py-3">
+                        @if (!string.IsNullOrWhiteSpace(scopeModalError))
+                        {
+                            <p class="rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">@scopeModalError</p>
+                        }
+                        <div class="grid gap-2 sm:grid-cols-[7.5rem_1fr] sm:items-start">
+                            <span class="text-xs font-medium text-gray-500 sm:pt-2">Como</span>
+                            <textarea class="@Tw.FormInput min-h-[56px]" rows="2" @bind="scopeActor" placeholder="rol o usuario"></textarea>
+                            <span class="text-xs font-medium text-gray-500 sm:pt-2">Qué necesito</span>
+                            <textarea class="@Tw.FormInput min-h-[56px]" rows="2" @bind="scopeWant" placeholder="acción o necesidad"></textarea>
+                            <span class="text-xs font-medium text-gray-500 sm:pt-2">Para qué necesito</span>
+                            <textarea class="@Tw.FormInput min-h-[56px]" rows="2" @bind="scopeBenefit" placeholder="beneficio o resultado"></textarea>
+                        </div>
+                    </div>
+                    <div class="flex justify-end gap-1.5 border-t border-gray-100 px-3 py-2">
+                        <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2.5 text-xs")" @onclick="CloseScopeModal">Cancelar</button>
+                        <button type="button" class="@($"{Tw.BtnPrimary} !py-1 !px-2.5 text-xs")" @onclick="ApplyScopeFromModal">Aplicar al alcance</button>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(detailModalKey))
+        {
+            var section = ScopeDetailSections.First(s => s.Key == detailModalKey);
+            var isListDetail = IsListDetailKey(detailModalKey);
+            <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-3" @onclick="CloseDetailModal">
+                <div class="w-full max-w-lg rounded-lg border border-gray-200 bg-white shadow-lg" @onclick:stopPropagation="true">
+                    <div class="flex items-start justify-between gap-2 border-b border-gray-100 px-3 py-2">
+                        <div>
+                            <h3 class="text-xs font-semibold text-gray-900">@(section.Title)</h3>
+                            <p class="text-xs text-gray-500">@(section.Placeholder)</p>
+                        </div>
+                        <button type="button" class="shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600" @onclick="CloseDetailModal" aria-label="Cerrar">
+                            <LucideIcon Name="x" CssClass="h-4 w-4" />
+                        </button>
+                    </div>
+                    <div class="max-h-[70vh] space-y-2 overflow-y-auto px-3 py-3">
+                        @if (isListDetail)
+                        {
+                            @for (var i = 0; i < detailItems.Count; i++)
+                            {
+                                var index = i;
+                                <div class="flex items-start gap-2">
+                                    <textarea class="@($"{Tw.FormInput} min-h-[112px] flex-1")"
+                                              rows="5"
+                                              value="@detailItems[index]"
+                                              @onchange="e => SetDetailItem(index, e.Value?.ToString())"
+                                              placeholder="@(section.Placeholder)"></textarea>
+                                    @if (detailItems.Count > 1)
+                                    {
+                                        <button type="button"
+                                                class="@($"{Tw.BtnOutline} shrink-0 text-xs text-red-800 hover:border-red-300 hover:bg-red-50")"
+                                                title="Quitar campo"
+                                                @onclick="() => RemoveDetailItem(index)">
+                                            Quitar
+                                        </button>
+                                    }
+                                </div>
+                            }
+                            <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2.5 text-xs")" @onclick="AddDetailItem">
+                                + Añadir
+                            </button>
+                        }
+                        else
+                        {
+                            <textarea class="@Tw.FormInput" rows="6" @bind="detailModalDraft" placeholder="@(section.Placeholder)"></textarea>
+                        }
+                    </div>
+                    <div class="flex justify-end gap-1.5 border-t border-gray-100 px-3 py-2">
+                        <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2.5 text-xs")" @onclick="CloseDetailModal">Cancelar</button>
+                        <button type="button" class="@($"{Tw.BtnPrimary} !py-1 !px-2.5 text-xs")" @onclick="ApplyDetailModal">Aplicar</button>
+                    </div>
+                </div>
+            </div>
+        }
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public string TicketId { get; set; } = "0";
+    [Inject] NavigationManager NavigationManager { get; set; } = default!;
+
+    private List<Enterprise> enterprises = new();
+    private List<Customer> filterCustomers = new();
+    private List<Project> projects = new();
+    private List<RequirementStatus> statuses = new();
+    private List<Priority> priorities = new();
+    private List<IBrowserFile> selectedFiles = new();
+    private List<FileAttachment> existingAttachments = new();
+
+    private long filterEnterpriseId, filterCustomerId, projectId, statusId, priorityId;
+    private string description = string.Empty;
+    private string scope = string.Empty;
+    private string scopeActor = string.Empty;
+    private string scopeWant = string.Empty;
+    private string scopeBenefit = string.Empty;
+    private string scopeCriteria = string.Empty;
+    private string scopeExceptions = string.Empty;
+    private string scopeConsiderations = string.Empty;
+    private bool showScopeModal;
+    private string? scopeModalError;
+    private string? detailModalKey;
+    private string detailModalDraft = string.Empty;
+    private List<string> detailItems = new() { string.Empty };
+
+    private static readonly (string Key, string Title, string Placeholder)[] ScopeDetailSections =
+    {
+        ("criteria", "Criterios de aceptación", "Condiciones para considerar el requerimiento cumplido"),
+        ("exceptions", "Excepciones", "Casos especiales o límites"),
+        ("considerations", "Consideraciones adicionales", "Notas, supuestos o dependencias")
+    };
+    private string requesterName = string.Empty;
+    private string freshDeskTicketNumber = string.Empty;
+    private string impactedSystems = string.Empty;
+    private DateTime startDate = DateTime.Today;
+    private DateTime requestDate = DateTime.Today;
+    private DateTime? endDate, actualEndDate;
+    private bool isWithinScope = true;
+    private short scopeChangeReasonValue;
+    private bool isProductionReprocess;
+    private bool update;
+    private bool readOnly;
+    private long editingId;
+    private long backlogSourceId;
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private bool allowed;
+
+    private string? formError;
+    private string? fileError;
+    private string? projectError;
+    private string? statusError;
+    private string? priorityError;
+    private string? requesterError;
+    private string? impactedSystemsError;
+    private string? descriptionError;
+    private string? scopeError;
+    private string? scopeReasonError;
+    private string? endDateError;
+
+    private static string FieldClass(string? error) =>
+        string.IsNullOrWhiteSpace(error) ? Tw.FormInput : Tw.FormInputError;
+
+    private static string BoolValue(bool value) => value ? "true" : "false";
+
+    private void OnIsWithinScopeChange(ChangeEventArgs e)
+    {
+        isWithinScope = e.Value?.ToString() != "false";
+        if (isWithinScope)
+        {
+            scopeChangeReasonValue = 0;
+            scopeReasonError = null;
+        }
+    }
+
+    private void OnRequirementTypeChange(ChangeEventArgs e) =>
+        isProductionReprocess = e.Value?.ToString() == "true";
+
+    private IEnumerable<RequirementStatus> GetSelectableRequirementStatuses()
+    {
+        foreach (var item in statuses)
+        {
+            if (!perms.CanFinalize &&
+                FinalizeStatusHelper.IsRequirementFinalized(item.IsClosed) &&
+                item.Id != statusId)
+                continue;
+
+            yield return item;
+        }
+    }
+
+    private string PageTitle => readOnly
+        ? "Detalle del requerimiento"
+        : update ? "Editar requerimiento" : "Nuevo requerimiento";
+
+    private string PageSubtitle => readOnly
+        ? "Consulta de la información del requerimiento."
+        : update ? "Contenido a la izquierda; ubicación, estado y fechas en el panel lateral." : "Complete el contenido principal y la clasificación en el panel lateral.";
+
+    private string BuildScope() =>
+        $"Como {scopeActor.Trim()}, quiero {scopeWant.Trim()}, para {scopeBenefit.Trim()}.";
+
+    private string BuildPersistedScope()
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(scope))
+            parts.Add(scope.Trim());
+        if (!string.IsNullOrWhiteSpace(scopeCriteria))
+            parts.Add($"Criterios de aceptación:\n{scopeCriteria.Trim()}");
+        if (!string.IsNullOrWhiteSpace(scopeExceptions))
+            parts.Add($"Excepciones:\n{scopeExceptions.Trim()}");
+        if (!string.IsNullOrWhiteSpace(scopeConsiderations))
+            parts.Add($"Consideraciones adicionales:\n{scopeConsiderations.Trim()}");
+        return string.Join("\n\n", parts);
+    }
+
+    private string GetDetailValue(string key) => key switch
+    {
+        "criteria" => scopeCriteria,
+        "exceptions" => scopeExceptions,
+        "considerations" => scopeConsiderations,
+        _ => string.Empty
+    };
+
+    private void SetDetailValue(string key, string value)
+    {
+        switch (key)
+        {
+            case "criteria": scopeCriteria = value; break;
+            case "exceptions": scopeExceptions = value; break;
+            case "considerations": scopeConsiderations = value; break;
+        }
+    }
+
+    private void OpenScopeModal()
+    {
+        scopeModalError = null;
+        showScopeModal = true;
+    }
+
+    private void CloseScopeModal()
+    {
+        showScopeModal = false;
+        scopeModalError = null;
+    }
+
+    private void ApplyScopeFromModal()
+    {
+        if (!IsUserStoryComplete())
+        {
+            scopeModalError = "Complete todos los campos.";
+            return;
+        }
+
+        scope = BuildScope();
+        scopeError = null;
+        CloseScopeModal();
+    }
+
+    private bool IsUserStoryComplete() =>
+        !string.IsNullOrWhiteSpace(scopeActor) &&
+        !string.IsNullOrWhiteSpace(scopeWant) &&
+        !string.IsNullOrWhiteSpace(scopeBenefit);
+
+    private void OpenDetailModal(string key)
+    {
+        detailModalKey = key;
+        if (IsListDetailKey(key))
+        {
+            detailItems = SplitDetailItems(GetDetailValue(key));
+            detailModalDraft = string.Empty;
+        }
+        else
+        {
+            detailModalDraft = GetDetailValue(key);
+            detailItems = new() { string.Empty };
+        }
+    }
+
+    private void CloseDetailModal()
+    {
+        detailModalKey = null;
+        detailModalDraft = string.Empty;
+        detailItems = new() { string.Empty };
+    }
+
+    private void ApplyDetailModal()
+    {
+        if (string.IsNullOrEmpty(detailModalKey)) return;
+
+        if (IsListDetailKey(detailModalKey))
+            SetDetailValue(detailModalKey, JoinDetailItems(detailItems));
+        else
+            SetDetailValue(detailModalKey, detailModalDraft.Trim());
+
+        CloseDetailModal();
+    }
+
+    private static bool IsListDetailKey(string? key) =>
+        key is "criteria" or "exceptions" or "considerations";
+
+    private void AddDetailItem() => detailItems.Add(string.Empty);
+
+    private void RemoveDetailItem(int index)
+    {
+        if (detailItems.Count <= 1 || index < 0 || index >= detailItems.Count) return;
+        detailItems.RemoveAt(index);
+    }
+
+    private void SetDetailItem(int index, string? value)
+    {
+        if (index < 0 || index >= detailItems.Count) return;
+        detailItems[index] = value ?? string.Empty;
+    }
+
+    private static List<string> SplitDetailItems(string value)
+    {
+        var items = value
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => line.TrimStart('-', '•', ' ').Trim())
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToList();
+        return items.Count > 0 ? items : new List<string> { string.Empty };
+    }
+
+    private static string JoinDetailItems(IEnumerable<string> items) =>
+        string.Join("\n", items
+            .Select(x => x.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => $"- {x}"));
+
+    private string GetInitialScopeLabel()
+    {
+        if (isWithinScope)
+            return "Sí";
+
+        return scopeChangeReasonValue switch
+        {
+            (short)TaskScopeChangeReason.Internal => "No · Por nosotros",
+            (short)TaskScopeChangeReason.External => "No · Externo",
+            _ => "No"
+        };
+    }
+
+    private string GetInitialScopeBadgeClass() =>
+        "inline-flex rounded-full px-2.5 py-1 text-xs font-medium " +
+        (isWithinScope ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800");
+
+    private string GetRequirementTypeLabel() =>
+        isProductionReprocess ? "Reproceso producción" : "Nuevo requerimiento";
+
+    private string GetRequirementTypeBadgeClass() =>
+        "inline-flex rounded-full px-2.5 py-1 text-xs font-medium " +
+        (isProductionReprocess ? "bg-rose-100 text-rose-800" : "bg-sky-100 text-sky-800");
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/requirement-list");
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        statuses = catalogEngine.GetRequirementStatuses().Data ?? new();
+        priorities = catalogEngine.GetPriorities().Data ?? new();
+        update = TicketId != "0";
+        readOnly = update && !perms.CanEdit;
+        allowed = perms.CanView && (update || perms.CanCreate);
+        if (update && allowed)
+            await SetValues();
+        else if (!update && allowed)
+            PrefillFromBacklogQuery();
+    }
+
+    private void PrefillFromBacklogQuery()
+    {
+        var uri = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        if (!QueryHelpers.ParseQuery(uri.Query).TryGetValue("backlogId", out var values) ||
+            !long.TryParse(values.FirstOrDefault(), out var backlogId) ||
+            backlogId <= 0)
+            return;
+
+        var response = backlogEngine.GetItems(new BacklogListRequest { Context = context });
+        var item = response.Success
+            ? response.Data?.Items.FirstOrDefault(x => x.Id == backlogId)
+            : null;
+        if (item == null)
+        {
+            formError = "No se encontró el ítem de backlog.";
+            return;
+        }
+
+        backlogSourceId = item.Id;
+        description = item.Name?.Trim() ?? string.Empty;
+        var backlogScope = item.Description?.Trim() ?? string.Empty;
+        scope = backlogScope;
+        scopeWant = backlogScope;
+        requesterName = context.Name?.Trim() ?? string.Empty;
+        statusId = statuses.FirstOrDefault(s =>
+                       s.Description.Equals("Pendiente", StringComparison.OrdinalIgnoreCase))?.Id
+                   ?? statuses.FirstOrDefault()?.Id ?? 0;
+        priorityId = priorities.FirstOrDefault(p =>
+                         p.Description.Equals("Media", StringComparison.OrdinalIgnoreCase))?.Id
+                     ?? priorities.FirstOrDefault()?.Id ?? 0;
+
+        if (item.CustomerId <= 0) return;
+
+        filterEnterpriseId = item.EnterpriseId;
+        filterCustomers = filterEnterpriseId > 0
+            ? (catalogEngine.GetCustomers().Data ?? new()).Where(x => x.EnterpriseId == filterEnterpriseId).ToList()
+            : catalogEngine.GetCustomers().Data ?? new();
+        filterCustomerId = item.CustomerId;
+        projects = (catalogEngine.GetProjects().Data ?? new())
+            .Where(x => x.CustomerId == filterCustomerId)
+            .ToList();
+    }
+
+    private void HandleEnterpriseChange(ChangeEventArgs e)
+    {
+        filterEnterpriseId = long.Parse(e.Value!.ToString()!);
+        filterCustomerId = 0;
+        projectId = 0;
+        filterCustomers = filterEnterpriseId > 0
+            ? (catalogEngine.GetCustomers().Data ?? new()).Where(x => x.EnterpriseId == filterEnterpriseId).ToList()
+            : catalogEngine.GetCustomers().Data ?? new();
+        projects = new();
+    }
+
+    private void HandleCustomerChange(ChangeEventArgs e)
+    {
+        filterCustomerId = long.Parse(e.Value!.ToString()!);
+        projectId = 0;
+        projects = filterCustomerId > 0
+            ? (catalogEngine.GetProjects().Data ?? new()).Where(x => x.CustomerId == filterCustomerId).ToList()
+            : catalogEngine.GetProjects().Data ?? new();
+    }
+
+    private void HandleFileChanged(InputFileChangeEventArgs e)
+    {
+        fileError = null;
+        foreach (var file in e.GetMultipleFiles(50))
+        {
+            if (selectedFiles.Any(f => f.Name == file.Name && f.Size == file.Size))
+                continue;
+
+            if (file.Size <= 512000)
+                selectedFiles.Add(file);
+            else
+                fileError = $"El archivo \"{file.Name}\" supera 512 KB.";
+        }
+    }
+
+    private void RemoveFile(IBrowserFile file) => selectedFiles.Remove(file);
+
+    private List<FileItem> BuildFiles() => selectedFiles.Select(file => new FileItem
+    {
+        Name = file.Name,
+        File = file.OpenReadStream()
+    }).ToList();
+
+    private bool FormValidate()
+    {
+        formError = projectError = statusError = priorityError = requesterError =
+            impactedSystemsError = descriptionError = scopeError = scopeReasonError = endDateError = null;
+        var valid = true;
+
+        if (projectId == 0) { projectError = "Seleccione un proyecto."; valid = false; }
+        if (statusId == 0) { statusError = "Seleccione un estado."; valid = false; }
+        if (priorityId == 0) { priorityError = "Seleccione una prioridad."; valid = false; }
+        if (string.IsNullOrWhiteSpace(description)) { descriptionError = "La descripción es obligatoria."; valid = false; }
+        if (backlogSourceId > 0)
+        {
+            if (!IsUserStoryComplete())
+            {
+                scopeError = "Debe completar la historia de usuario.";
+                valid = false;
+            }
+            else
+                scope = BuildScope();
+        }
+        else if (string.IsNullOrWhiteSpace(scope)) { scopeError = "El alcance es obligatorio."; valid = false; }
+        if (string.IsNullOrWhiteSpace(requesterName)) { requesterError = "El solicitante es obligatorio."; valid = false; }
+        if (string.IsNullOrWhiteSpace(impactedSystems)) { impactedSystemsError = "Indique los sistemas impactados."; valid = false; }
+        if (!endDate.HasValue) { endDateError = "La fecha fin planificada es obligatoria."; valid = false; }
+        else if (endDate.Value.Date < startDate.Date)
+        {
+            endDateError = "La fecha fin planificada no puede ser anterior al inicio.";
+            valid = false;
+        }
+        if (!isWithinScope && scopeChangeReasonValue == 0)
+        {
+            scopeReasonError = "Indique si el cambio es por nosotros o externo.";
+            valid = false;
+        }
+
+        return valid;
+    }
+
+    private void save()
+    {
+        if (!FormValidate()) return;
+
+        var response = ticketCreateEngine.Execute(new RequirementCreateRequest
+        {
+            ProjectId = projectId,
+            Description = description,
+            Scope = BuildPersistedScope(),
+            RequirementStatusId = statusId,
+            PriorityId = priorityId,
+            StartDate = startDate,
+            EndDate = endDate,
+            ActualEndDate = null,
+            RequesterName = requesterName,
+            RequestDate = requestDate,
+            ImpactedSystems = impactedSystems,
+            FreshDeskTicketNumber = freshDeskTicketNumber,
+            IsWithinOriginalScope = isWithinScope,
+            ScopeChangeReason = isWithinScope ? null : scopeChangeReasonValue,
+            IsProductionReprocess = isProductionReprocess,
+            Files = BuildFiles(),
+            Context = context
+        });
+
+        if (!response.Success) { formError = response.Message.Description; return; }
+
+        if (!TryMarkBacklogConverted(out var backlogError))
+        {
+            formError = backlogError;
+            return;
+        }
+
+        NavigationManager.NavigateTo(backlogSourceId > 0 ? "/backlog" : "/requirement-list");
+    }
+
+    private void UpdateTicket()
+    {
+        if (!FormValidate()) return;
+
+        var response = ticketUpdateEngine.Execute(new RequirementUpdateRequest
+        {
+            Id = editingId,
+            ProjectId = projectId,
+            Description = description,
+            Scope = BuildPersistedScope(),
+            RequirementStatusId = statusId,
+            PriorityId = priorityId,
+            StartDate = startDate,
+            EndDate = endDate,
+            ActualEndDate = actualEndDate,
+            RequesterName = requesterName,
+            RequestDate = requestDate,
+            ImpactedSystems = impactedSystems,
+            FreshDeskTicketNumber = freshDeskTicketNumber,
+            IsWithinOriginalScope = isWithinScope,
+            ScopeChangeReason = isWithinScope ? null : scopeChangeReasonValue,
+            IsProductionReprocess = isProductionReprocess,
+            Files = BuildFiles(),
+            Context = context
+        });
+
+        if (!response.Success) { formError = response.Message.Description; return; }
+        NavigationManager.NavigateTo("/requirement-list");
+    }
+
+    private bool TryMarkBacklogConverted(out string? error)
+    {
+        error = null;
+        if (backlogSourceId <= 0) return true;
+
+        var listResponse = backlogEngine.GetItems(new BacklogListRequest { Context = context });
+        var item = listResponse.Success
+            ? listResponse.Data?.Items.FirstOrDefault(x => x.Id == backlogSourceId)
+            : null;
+        if (item == null)
+        {
+            error = "Requerimiento creado, pero no se encontró el backlog para actualizar.";
+            return false;
+        }
+
+        var statusIdConverted = (catalogEngine.GetBacklogStatuses().Data ?? new())
+            .FirstOrDefault(s => s.Description.Contains("requerimiento", StringComparison.OrdinalIgnoreCase))?.Id
+            ?? (catalogEngine.GetBacklogStatuses().Data ?? new()).Where(s => s.IsClosed).OrderBy(s => s.Order).FirstOrDefault()?.Id
+            ?? 0;
+        if (statusIdConverted <= 0)
+        {
+            error = "Requerimiento creado, pero no hay estado 'En requerimiento' en backlog.";
+            return false;
+        }
+
+        var saveResponse = backlogEngine.Save(new BacklogSaveRequest
+        {
+            Id = item.Id,
+            Name = item.Name,
+            Description = item.Description,
+            BacklogStatusId = statusIdConverted,
+            CustomerId = item.CustomerId,
+            Context = context
+        });
+        if (!saveResponse.Success)
+        {
+            error = "Requerimiento creado, pero no se pudo actualizar el backlog: " + saveResponse.Message.Description;
+            return false;
+        }
+
+        return true;
+    }
+
+    private void cancel() =>
+        NavigationManager.NavigateTo(backlogSourceId > 0 ? "/backlog" : "/requirement-list");
+
+    private async System.Threading.Tasks.Task SetValues()
+    {
+        editingId = Convert.ToInt64(TicketId);
+        var ticket = ticketReadEngine.GetTicket(new RequirementReadRequest { Id = editingId }).Data?.Tickets.FirstOrDefault();
+        if (ticket == null) return;
+
+        projectId = ticket.ProjectId;
+        statusId = ticket.RequirementStatusId;
+        priorityId = ticket.PriorityId;
+        description = ticket.Description;
+        scope = ticket.Scope;
+        startDate = ticket.StartDate;
+        endDate = ticket.EndDate;
+        actualEndDate = ticket.ActualEndDate;
+        requesterName = ticket.RequesterName ?? string.Empty;
+        freshDeskTicketNumber = ticket.FreshDeskTicketNumber ?? string.Empty;
+        requestDate = ticket.RequestDate == default ? ticket.StartDate : ticket.RequestDate;
+        impactedSystems = ticket.ImpactedSystems ?? string.Empty;
+        isWithinScope = ticket.IsWithinOriginalScope;
+        scopeChangeReasonValue = ticket.ScopeChangeReason ?? 0;
+        isProductionReprocess = ticket.IsProductionReprocess;
+        existingAttachments = ticket.FileAttachments?.ToList() ?? new();
+        selectedFiles = new();
+
+        var projectsData = catalogEngine.GetProjects().Data ?? new();
+        var customersData = catalogEngine.GetCustomers().Data ?? new();
+        var project = projectsData.FirstOrDefault(p => p.Id == projectId);
+        if (project != null)
+        {
+            filterCustomerId = project.CustomerId;
+            var customer = customersData.FirstOrDefault(c => c.Id == filterCustomerId);
+            if (customer != null)
+            {
+                filterEnterpriseId = customer.EnterpriseId;
+                filterCustomers = customersData.Where(x => x.EnterpriseId == filterEnterpriseId).ToList();
+            }
+            projects = projectsData.Where(x => x.CustomerId == filterCustomerId).ToList();
+        }
+    }
+}

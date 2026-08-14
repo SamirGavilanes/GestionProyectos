@@ -1,0 +1,8 @@
+@if (!string.IsNullOrWhiteSpace(Message))
+{
+    <p class="@Tw.FormError">@Message</p>
+}
+
+@code {
+    [Parameter] public string? Message { get; set; }
+}

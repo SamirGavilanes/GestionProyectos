@@ -1,0 +1,8 @@
+@page "/security-admin"
+@inject NavigationManager Navigation
+@attribute [Authorize]
+
+@code {
+    protected override void OnInitialized() =>
+        Navigation.NavigateTo("/security-roles", replace: true);
+}

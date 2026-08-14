@@ -1,0 +1,487 @@
+@page "/project-list"
+@inject IJSRuntime JSRuntime
+@inject ICatalogEngine catalogEngine
+@inject IProjectReadEngine projectReadEngine
+@inject IProjectUpdateEngine projectUpdateEngine
+@inject IProjectDeleteEngine projectDeleteEngine
+@inject ISecurityEngine securityEngine
+@inject ISessionStorageService session
+@inject NavigationManager NavigationManager
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature.Project.Delete
+@using GestionProyectos.Engine.Feature.Project.Delete.Request
+@using GestionProyectos.Engine.Feature.Project.Read
+@using GestionProyectos.Engine.Feature.Project.Read.Request
+@using GestionProyectos.Engine.Feature.Project.Update
+@using GestionProyectos.Engine.Feature.Project.Update.Request
+@using GestionProyectos.Engine.Security
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Engine.Feature
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/project-list">
+        <PageHeader Title="Proyectos" Subtitle="Administra proyectos por cliente y estado."
+                    ShowFacetsToggle="true"
+                    FacetsVisible="showFacets"
+                    FacetsVisibleChanged="@(v => showFacets = v)"
+                    ActiveFilterCount="@GetActiveFilterCount()">
+            <Actions>
+                <ListPageToolbar ShowSearch="true"
+                                 SearchValue="@searchInput"
+                                 SearchValueChanged="@(v => searchInput = v)"
+                                 ShowViewMode="true"
+                                 ViewMode="@viewMode"
+                                 ViewModeChanged="OnViewModeChanged"
+                                 OnRefresh="RefreshTable">
+                    <LeadingContent>
+                        @if (perms.CanCreate)
+                        {
+                            <button type="button" class="@Tw.BtnPrimary" @onclick="GoToCreate" title="Nuevo proyecto">
+                                <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                            </button>
+                        }
+                    </LeadingContent>
+                </ListPageToolbar>
+            </Actions>
+        </PageHeader>
+
+        <FilteredPageLayout FacetsVisible="showFacets"
+                            FacetsVisibleChanged="@(v => showFacets = v)"
+                            ActiveFilterCount="@GetActiveFilterCount()"
+                            OnClearFacets="ClearFilters">
+            <Facets>
+                <FacetSection Title="Empresa">
+                    <FacetCheckboxList Options="enterpriseOptions"
+                                       MultiSelect="false"
+                                       SelectedId="enterpriseId"
+                                       SelectedIdChanged="HandleEnterpriseChange" />
+                </FacetSection>
+                <FacetSection Title="Cliente">
+                    <FacetCheckboxList Options="customerOptions"
+                                       MultiSelect="false"
+                                       SelectedId="customerId"
+                                       SelectedIdChanged="HandleCustomerChange" />
+                </FacetSection>
+                <FacetSection Title="Estado">
+                    <FacetCheckboxList Options="statusOptions"
+                                       SelectedIds="statusIds"
+                                       SelectedIdsChanged="HandleStatusChange" />
+                </FacetSection>
+            </Facets>
+            <ChildContent>
+        @if (viewMode == ViewList)
+        {
+        <div class="@Tw.TableWrapContained">
+            <table class="@Tw.Table">
+                <colgroup>
+                    <col class="w-14" />
+                    <col />
+                    <col />
+                    <col />
+                    <col class="w-24" />
+                    <col class="w-24" />
+                    <col class="w-28" />
+                    <col class="w-8" />
+                </colgroup>
+                <thead>
+                    <tr>
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyView">ID</SortableTh>
+                        <SortableTh Column="Description" State="tableState" OnSorted="ApplyView">Nombre</SortableTh>
+                        <SortableTh Column="Enterprise" State="tableState" OnSorted="ApplyView">Empresa</SortableTh>
+                        <SortableTh Column="Customer" State="tableState" OnSorted="ApplyView">Cliente</SortableTh>
+                        <SortableTh Column="StartDate" State="tableState" OnSorted="ApplyView">Inicio</SortableTh>
+                        <SortableTh Column="EndDate" State="tableState" OnSorted="ApplyView">Fecha Limite</SortableTh>
+                        <SortableTh Column="Status" State="tableState" OnSorted="ApplyView">Estado</SortableTh>
+                        <th class="@Tw.ThActionsAuto"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (displayProjects.Count == 0)
+                    {
+                        <tr><td colspan="8" class="@Tw.Td text-center text-gray-400">No hay registros</td></tr>
+                    }
+                    @foreach (var p in displayProjects)
+                    {
+                        <tr class="hover:bg-gray-50">
+                            <td class="@Tw.Td w-14">@p.Id</td>
+                            <td class="@Tw.TdText">
+                                <button type="button"
+                                        class="block max-w-full truncate text-left font-medium text-primary-700 hover:underline"
+                                        title="@p.Description"
+                                        @onclick="() => GoToDetail(p.Id)">
+                                    @p.Description
+                                </button>
+                            </td>
+                            <td class="@Tw.TdText" title="@p.Enterprise">@(string.IsNullOrWhiteSpace(p.Enterprise) ? "—" : p.Enterprise)</td>
+                            <td class="@Tw.TdText" title="@p.Customer">@p.Customer</td>
+                            <td class="@($"{Tw.Td} whitespace-nowrap tabular-nums")">@FormatDate(p.StartDate)</td>
+                            <td class="@($"{Tw.Td} whitespace-nowrap tabular-nums")">@FormatDate(p.EndDate)</td>
+                            <td class="@Tw.Td">
+                                <StatusBadge Compact="true" Label="@p.Status" Color="@p.StatusBadgeColor" />
+                            </td>
+                            <td class="@Tw.TdActionsAuto">
+                                <TableRowActionsMenu>
+                                    <TableRowAction Label="Ver análisis" OnClick="@(() => GoToAnalysis(p))" />
+                                    @if (perms.CanEdit)
+                                    {
+                                        <TableRowAction Label="Editar" OnClick="@(() => GoToEdit(p.Id))" />
+                                    }
+                                    @if (perms.CanDelete)
+                                    {
+                                        <TableRowAction Label="Eliminar" Danger OnClick="@(() => DeleteProject(p))" />
+                                    }
+                                </TableRowActionsMenu>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyView" />
+        }
+        else
+        {
+            <KanbanBoard TItem="GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project"
+                         Columns="kanbanColumns"
+                         Items="filteredProjects"
+                         StatusIdSelector="p => p.ProjectStatusId"
+                         EnableDrag="perms.CanEdit"
+                         OnMove="OnProjectMoved">
+                <CardTemplate Context="p">
+                    <button type="button"
+                            class="@($"{Tw.KanbanCardTitle} w-full truncate text-left hover:text-primary-700")"
+                            title="@p.Description"
+                            @onclick="() => GoToDetail(p.Id)">
+                        @p.Description
+                    </button>
+                    <p class="@Tw.KanbanCardMeta">#@p.Id · @(string.IsNullOrWhiteSpace(p.Enterprise) ? "—" : p.Enterprise) · @p.Customer</p>
+                    <p class="@Tw.KanbanCardMeta">@FormatProjectDates(p)</p>
+                    <div class="mt-1">
+                        <StatusBadge Compact="true" Label="@p.Status" Color="@p.StatusBadgeColor" />
+                    </div>
+                    <div class="mt-2 flex flex-wrap gap-1">
+                        <button type="button" class="@Tw.TableBtn" @onclick="() => GoToAnalysis(p)">Ver análisis</button>
+                        @if (perms.CanEdit)
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => GoToEdit(p.Id)">Editar</button>
+                        }
+                        @if (perms.CanDelete)
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => DeleteProject(p)">Eliminar</button>
+                        }
+                    </div>
+                </CardTemplate>
+            </KanbanBoard>
+        }
+            </ChildContent>
+        </FilteredPageLayout>
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private const string ViewList = "list";
+    private const string ViewKanban = "kanban";
+
+    private string viewMode = ViewList;
+    private List<KanbanColumn> kanbanColumns = new();
+    private readonly PagedTableState tableState = new();
+
+    private List<Enterprise> enterprises = new();
+    private List<Customer> customers = new();
+    private List<Customer> allCustomers = new();
+    private List<ProjectStatus> statuses = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> projectList = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> allProjects = new();
+    private List<FacetOption> enterpriseOptions = new();
+    private List<FacetOption> customerOptions = new();
+    private List<FacetOption> statusOptions = new();
+    private Dictionary<long, long> customerEnterpriseMap = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> displayProjects = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> filteredProjects = new();
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+
+    private long enterpriseId, customerId;
+    private HashSet<long> statusIds = new();
+    private string? searchText;
+    private bool showFacets;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        LoadPermissions();
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        allCustomers = catalogEngine.GetCustomers().Data ?? new();
+        customers = allCustomers.ToList();
+        statuses = catalogEngine.GetProjectStatuses().Data ?? new();
+        var activoId = statuses.FirstOrDefault(s => s.Description.Equals("Activo", StringComparison.OrdinalIgnoreCase))?.Id ?? 0;
+        if (activoId > 0)
+            statusIds = new HashSet<long> { activoId };
+        kanbanColumns = statuses.OrderBy(s => s.Order).Select(s => new KanbanColumn { Id = s.Id, Title = s.Description, BadgeColor = s.BadgeColor }).ToList();
+        customerEnterpriseMap = allCustomers.ToDictionary(c => c.Id, c => c.EnterpriseId);
+        LoadAllProjectsForFacets();
+        GetProjects();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private string GetEnterpriseName(long enterpriseId) =>
+        enterprises.FirstOrDefault(e => e.Id == enterpriseId)?.Description ?? "—";
+
+    private string GetCustomerOptionLabel(Customer customer) =>
+        $"{customer.Description} · {GetEnterpriseName(customer.EnterpriseId)}";
+
+    private static string FormatDate(DateTime? date) =>
+        date?.ToString("dd/MM/yyyy") ?? "—";
+
+    private static string FormatProjectDates(GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project project)
+    {
+        var start = FormatDate(project.StartDate);
+        var end = FormatDate(project.EndDate);
+        var actual = FormatDate(project.ActualEndDate);
+        return $"Inicio {start} · Fin {end} · Real {actual}";
+    }
+
+    private long GetProjectEnterpriseId(GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project project) =>
+        customerEnterpriseMap.GetValueOrDefault(project.CustomerId);
+
+    private void LoadAllProjectsForFacets()
+    {
+        var response = projectReadEngine.GetProjects(new ProjectReadRequest());
+        allProjects = response.Success ? response.Data?.Projects.ToList() ?? new() : new();
+        RefreshFacetOptions();
+    }
+
+    private void RefreshFacetOptions()
+    {
+        var enterpriseCatalog = enterprises.Select(e => (e.Id, e.Description));
+        enterpriseOptions = enterpriseCatalog.ToFacetOptions(
+            allProjects,
+            p => GetProjectEnterpriseId(p),
+            p => (customerId == 0 || p.CustomerId == customerId)
+                 && FacetFilter.Matches(p.ProjectStatusId, statusIds, statuses.Count),
+            enterpriseId);
+
+        var customerCatalog = customers.Select(c => (c.Id, GetCustomerOptionLabel(c)));
+        customerOptions = customerCatalog.ToFacetOptions(
+            allProjects,
+            p => p.CustomerId,
+            p => (enterpriseId == 0 || GetProjectEnterpriseId(p) == enterpriseId)
+                 && FacetFilter.Matches(p.ProjectStatusId, statusIds, statuses.Count),
+            customerId);
+
+        var statusCatalog = statuses.Select(s => (s.Id, s.Description));
+        statusOptions = statusCatalog.ToFacetOptions(
+            allProjects,
+            p => p.ProjectStatusId,
+            p => (enterpriseId == 0 || GetProjectEnterpriseId(p) == enterpriseId)
+                 && (customerId == 0 || p.CustomerId == customerId),
+            statusIds);
+    }
+
+    private void HandleEnterpriseChange(long id)
+    {
+        enterpriseId = id;
+        customerId = 0;
+        customers = enterpriseId > 0
+            ? allCustomers.Where(x => x.EnterpriseId == enterpriseId).ToList()
+            : allCustomers.ToList();
+        RefreshFacetOptions();
+        GetProjects();
+    }
+
+    private void HandleCustomerChange(long id)
+    {
+        customerId = id;
+        RefreshFacetOptions();
+        GetProjects();
+    }
+
+    private void HandleStatusChange(IReadOnlySet<long> ids)
+    {
+        statusIds = new HashSet<long>(ids);
+        RefreshFacetOptions();
+        GetProjects();
+    }
+
+    private void OnViewModeChanged(string mode) => viewMode = mode;
+
+    private void RefreshTable()
+    {
+        LoadAllProjectsForFacets();
+        GetProjects();
+    }
+
+    private void GetProjects()
+    {
+        var response = projectReadEngine.GetProjects(new ProjectReadRequest
+        {
+            CustomerId = customerId,
+            EnterpriseId = enterpriseId,
+            ProjectStatusId = FacetFilter.ToApiSingleId(statusIds)
+        });
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        projectList = response.Data?.Projects.ToList() ?? new();
+        tableState.ResetPage();
+        ApplyView();
+    }
+
+    private void ApplyView()
+    {
+        IEnumerable<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> query = projectList;
+
+        if (FacetFilter.IsActive(statusIds, statuses.Count))
+            query = query.Where(p => statusIds.Contains(p.ProjectStatusId));
+
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText.ToLower();
+            query = query.Where(x => TableSearch.Matches(s,
+                x.Id.ToString(), x.Description, x.Status, x.Customer, x.Enterprise,
+                FormatProjectDates(x)));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Description" => tableState.SortAscending ? query.OrderBy(x => x.Description) : query.OrderByDescending(x => x.Description),
+            "Enterprise" => tableState.SortAscending ? query.OrderBy(x => x.Enterprise) : query.OrderByDescending(x => x.Enterprise),
+            "Customer" => tableState.SortAscending ? query.OrderBy(x => x.Customer) : query.OrderByDescending(x => x.Customer),
+            "StartDate" => tableState.SortAscending ? query.OrderBy(x => x.StartDate) : query.OrderByDescending(x => x.StartDate),
+            "EndDate" => tableState.SortAscending
+                ? query.OrderBy(x => x.EndDate ?? DateTime.MaxValue)
+                : query.OrderByDescending(x => x.EndDate ?? DateTime.MinValue),
+            "Status" => tableState.SortAscending ? query.OrderBy(x => x.Status) : query.OrderByDescending(x => x.Status),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        filteredProjects = query.ToList();
+        tableState.SetPageCount(filteredProjects.Count);
+        displayProjects = tableState.Paginate(filteredProjects).ToList();
+    }
+
+    private void LoadPermissions()
+    {
+        if (IsAdminRole())
+        {
+            perms = PagePermissions.Full;
+            return;
+        }
+
+        if (context.UserId > 0)
+            perms = securityEngine.GetPermissionsForUser(context.UserId, "/project-list");
+        else
+            perms = PermissionHelper.Resolve(context, "/project-list");
+    }
+
+    private bool IsAdminRole() =>
+        context.Role?.Equals("Administrador", StringComparison.OrdinalIgnoreCase) == true;
+
+    private void GoToAnalysis(GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project project) =>
+        NavigationManager.NavigateTo(AppRoutes.ProjectAnalysis(project.Id));
+
+    private void GoToCreate() => NavigationManager.NavigateTo("/create-project/0");
+    private void GoToEdit(long id) => NavigationManager.NavigateTo($"/create-project/{id}");
+    private void GoToDetail(long projectId) => NavigationManager.NavigateTo(AppRoutes.ProjectDetail(projectId));
+
+    private void DeleteProject(GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project p)
+    {
+        if (!perms.CanDelete) return;
+        var response = projectDeleteEngine.Execute(new ProjectDeleteRequest { ProjectId = p.Id });
+        if (!response.Success) JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+        GetProjects();
+    }
+
+    private async System.Threading.Tasks.Task OnProjectMoved(KanbanMoveEventArgs<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> args)
+    {
+        if (!perms.CanEdit || args.Item.ProjectStatusId == args.NewStatusId) return;
+
+        if (IsFinalizedProjectStatus(args.NewStatusId) && !perms.CanFinalize)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "No tiene permiso para finalizar proyectos.");
+            return;
+        }
+
+        var previousStatusId = args.Item.ProjectStatusId;
+        var previousStatus = args.Item.Status;
+        var previousBadgeColor = args.Item.StatusBadgeColor;
+        var previousIsClosed = args.Item.IsClosedStatus;
+        var newStatus = statuses.FirstOrDefault(s => s.Id == args.NewStatusId);
+
+        args.Item.ProjectStatusId = args.NewStatusId;
+        args.Item.Status = newStatus?.Description ?? args.Item.Status;
+        args.Item.StatusBadgeColor = newStatus?.BadgeColor ?? args.Item.StatusBadgeColor;
+        args.Item.IsClosedStatus = newStatus?.IsClosed ?? args.Item.IsClosedStatus;
+        StateHasChanged();
+
+        var response = projectUpdateEngine.Execute(new ProjectUpdateRequest
+        {
+            Id = args.Item.Id,
+            CustomerId = args.Item.CustomerId,
+            ProjectStatusId = args.NewStatusId,
+            Description = args.Item.Description,
+            StartDate = args.Item.StartDate,
+            EndDate = args.Item.EndDate,
+            ActualEndDate = args.Item.ActualEndDate,
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            args.Item.ProjectStatusId = previousStatusId;
+            args.Item.Status = previousStatus;
+            args.Item.StatusBadgeColor = previousBadgeColor;
+            args.Item.IsClosedStatus = previousIsClosed;
+            StateHasChanged();
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+        }
+    }
+
+    private bool IsFinalizedProjectStatus(long statusId)
+    {
+        var status = statuses.FirstOrDefault(s => s.Id == statusId);
+        return status != null && FinalizeStatusHelper.IsProjectFinalized(status.IsClosed);
+    }
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (enterpriseId > 0) count++;
+        if (customerId > 0) count++;
+        if (FacetFilter.IsActive(statusIds, statuses.Count)) count++;
+        return count;
+    }
+
+    private void ClearFilters()
+    {
+        enterpriseId = 0;
+        customerId = 0;
+        customers = allCustomers.ToList();
+        var activoId = statuses.FirstOrDefault(s => s.Description.Equals("Activo", StringComparison.OrdinalIgnoreCase))?.Id ?? 0;
+        statusIds = activoId > 0 ? new HashSet<long> { activoId } : new HashSet<long>();
+        RefreshFacetOptions();
+        GetProjects();
+    }
+
+    string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+}

@@ -1,0 +1,229 @@
+@page "/customer-list"
+@inject IJSRuntime JSRuntime
+@inject ICatalogEngine catalogEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/customer-list">
+        <PageHeader Title="Clientes" Subtitle="Catálogo de clientes por empresa.">
+            <Actions>
+                @if (perms.CanCreate)
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="StartCreate" disabled="@creating">
+                        <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                    </button>
+                }
+                <input type="text" class="@Tw.FilterInput" @bind-value="searchInput" placeholder="Buscar..." @bind-value:event="oninput" />
+                <TableRefreshButton OnClick="Load" />
+            </Actions>
+        </PageHeader>
+
+        <div class="@Tw.TableWrap">
+            <table class="@Tw.Table">
+                <colgroup>
+                    <col class="w-14" />
+                    <col />
+                    <col class="w-44" />
+                    <col class="w-28" />
+                </colgroup>
+                <thead>
+                    <tr>
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyView">Id</SortableTh>
+                        <SortableTh Column="Description" State="tableState" OnSorted="ApplyView">Descripción</SortableTh>
+                        <SortableTh Column="Enterprise" State="tableState" OnSorted="ApplyView" CssClass="w-44">Empresa</SortableTh>
+                        <th class="@Tw.ThActionsAuto"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (creating && perms.CanCreate)
+                    {
+                        <tr>
+                            <td class="@Tw.Td text-gray-400">Nuevo</td>
+                            <td class="@Tw.Td"><input type="text" class="@Tw.TableInput" @bind="newDescription" /></td>
+                            <td class="@Tw.Td">
+                                <select class="@Tw.TableSelect" @bind="newEnterpriseId">
+                                    <option value="0">-- Selecciona --</option>
+                                    @foreach (var e in enterprises) { <option value="@e.Id">@e.Description</option> }
+                                </select>
+                            </td>
+                            <td class="@Tw.TdActionsAuto">
+                                <div class="@Tw.TableActions">
+                                    <button type="button" class="@Tw.TableBtn" @onclick="Create">Guardar</button>
+                                    <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                    @if (displayCustomers.Count == 0 && !creating)
+                    {
+                        <tr><td colspan="4" class="@Tw.Td text-center text-gray-400">No hay registros</td></tr>
+                    }
+                    @foreach (var item in displayCustomers)
+                    {
+                        <tr class="hover:bg-gray-50">
+                            <td class="@Tw.Td w-14">@item.Id</td>
+                            @if (editingId == item.Id)
+                            {
+                                <td class="@Tw.Td"><input type="text" class="@Tw.TableInput" @bind="editDescription" /></td>
+                                <td class="@Tw.Td">
+                                    <select class="@Tw.TableSelect" @bind="editEnterpriseId">
+                                        <option value="0">-- Selecciona --</option>
+                                        @foreach (var e in enterprises) { <option value="@e.Id">@e.Description</option> }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="() => Update(item.Id)">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                    </div>
+                                </td>
+                            }
+                            else
+                            {
+                                <td class="@Tw.TdText" title="@item.Description">@item.Description</td>
+                                <td class="@Tw.Td w-44 truncate" title="@GetEnterpriseName(item.EnterpriseId)">@GetEnterpriseName(item.EnterpriseId)</td>
+                                <td class="@Tw.TdActionsAuto">
+                                    @if (perms.CanEdit || perms.CanDelete)
+                                    {
+                                        <TableRowActionsMenu>
+                                            @if (perms.CanEdit)
+                                            {
+                                                <TableRowAction Label="Editar" OnClick="@(() => StartEdit(item))" />
+                                            }
+                                            @if (perms.CanDelete)
+                                            {
+                                                <TableRowAction Label="Eliminar" Danger OnClick="@(() => Delete(item.Id))" />
+                                            }
+                                        </TableRowActionsMenu>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyView" />
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private List<Customer> allCustomers = new();
+    private List<Customer> displayCustomers = new();
+    private List<Enterprise> enterprises = new();
+    private readonly PagedTableState tableState = new();
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private bool creating;
+    private string newDescription = string.Empty;
+    private long newEnterpriseId;
+    private long editingId;
+    private string editDescription = string.Empty;
+    private long editEnterpriseId;
+    private string? searchText;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/customer-list");
+        enterprises = catalogEngine.GetEnterprises().Data ?? new List<Enterprise>();
+        Load();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private void Load()
+    {
+        var response = catalogEngine.GetCustomers();
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        allCustomers = response.Data ?? new List<Customer>();
+        tableState.ResetPage();
+        ApplyView();
+    }
+
+    private void ApplyView()
+    {
+        IEnumerable<Customer> query = allCustomers;
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText.ToLower();
+            query = query.Where(x => TableSearch.Matches(s,
+                x.Id.ToString(), x.Description, GetEnterpriseName(x.EnterpriseId)));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Description" => tableState.SortAscending ? query.OrderBy(x => x.Description) : query.OrderByDescending(x => x.Description),
+            "Enterprise" => tableState.SortAscending
+                ? query.OrderBy(x => GetEnterpriseName(x.EnterpriseId))
+                : query.OrderByDescending(x => GetEnterpriseName(x.EnterpriseId)),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        var list = query.ToList();
+        tableState.SetPageCount(list.Count);
+        displayCustomers = tableState.Paginate(list).ToList();
+    }
+
+    private string GetEnterpriseName(long id) => enterprises.FirstOrDefault(e => e.Id == id)?.Description ?? string.Empty;
+
+    private void StartCreate()
+    {
+        if (!perms.CanCreate) return;
+        creating = true; editingId = 0; newDescription = string.Empty; newEnterpriseId = 0;
+    }
+
+    private void StartEdit(Customer item)
+    {
+        if (!perms.CanEdit) return;
+        creating = false; editingId = item.Id; editDescription = item.Description; editEnterpriseId = item.EnterpriseId;
+    }
+
+    private void Cancel() { creating = false; editingId = 0; newDescription = string.Empty; newEnterpriseId = 0; editDescription = string.Empty; editEnterpriseId = 0; }
+
+    private void Create()
+    {
+        var response = catalogEngine.SaveCustomer(0, newDescription, newEnterpriseId, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel(); Load();
+    }
+
+    private void Update(long id)
+    {
+        var response = catalogEngine.SaveCustomer(id, editDescription, editEnterpriseId, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel(); Load();
+    }
+
+    private void Delete(long id)
+    {
+        if (!perms.CanDelete) return;
+        var response = catalogEngine.DeleteCustomer(id, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Load();
+    }
+
+    private string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+}

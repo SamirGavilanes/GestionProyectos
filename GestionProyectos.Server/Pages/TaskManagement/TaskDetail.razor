@@ -1,0 +1,1064 @@
+﻿@page "/task-detail/{TaskId:long}"
+@inject IJSRuntime JSRuntime
+@inject ITaskDetailReadEngine taskDetailReadEngine
+@inject ITaskUpdateEngine taskUpdateEngine
+@inject ITaskBugEngine taskBugEngine
+@inject ITaskNoteEngine taskNoteEngine
+@inject ICatalogEngine catalogEngine
+@inject ISessionStorageService session
+@inject NavigationManager NavigationManager
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature
+@using GestionProyectos.Engine.Feature.Task
+@using GestionProyectos.Engine.Feature.Task.Bug
+@using GestionProyectos.Engine.Feature.Task.Bug.Request
+@using GestionProyectos.Engine.Feature.Task.Bug.Response
+@using GestionProyectos.Engine.Feature.Task.Note
+@using GestionProyectos.Engine.Feature.Task.Note.Request
+@using GestionProyectos.Engine.Feature.Task.Note.Response
+@using GestionProyectos.Engine.Feature.Task.Detail
+@using GestionProyectos.Engine.Feature.Task.Detail.Request
+@using GestionProyectos.Engine.Feature.Task.Detail.Response
+@using GestionProyectos.Engine.Feature.Task.TaskUpdate
+@using GestionProyectos.Engine.Feature.Task.TaskUpdate.Request
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using GestionProyectos.Shared.Enums
+@using GestionProyectos.Shared.Models.UploadFile
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        @if (!perms.CanView)
+        {
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                No tiene permiso para ver esta tarea.
+            </div>
+        }
+        else if (loading)
+        {
+            <p class="text-xs text-gray-500">Cargando tarea...</p>
+        }
+        else if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">@errorMessage</div>
+        }
+        else if (detail != null)
+        {
+            <div class="-m-4 flex h-[calc(100dvh-2.25rem)] flex-col overflow-hidden p-4">
+                @if (!perms.CanEdit)
+                {
+                    <div class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Solo los administradores pueden modificar tareas.
+                    </div>
+                }
+                <div class="shrink-0 space-y-4">
+            <div class="@Tw.PageHeader">
+                <div class="flex flex-wrap items-start justify-between gap-2 px-3 py-2">
+                    <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                        <StatusBadge Label="@detail.Task.TaskStatus" Color="@detail.Task.TaskStatusBadgeColor" />
+                        <span class="@GetScopeBadgeClass(detail.Task.IsWithinOriginalScope)">@GetScopeLabel(detail.Task.IsWithinOriginalScope)</span>
+                        @if (!string.IsNullOrWhiteSpace(detail.Task.DevelopmentPhase))
+                        {
+                            <span class="@GetPhaseBadgeClass()" title="@detail.Task.DevelopmentPhase">@detail.Task.DevelopmentPhase</span>
+                        }
+                        <StatusBadge Label="@detail.Task.Priority" Color="@detail.Task.PriorityBadgeColor" />
+                    </div>
+                    <div class="flex shrink-0 flex-wrap items-center gap-2">
+                        @if (perms.CanEdit)
+                        {
+                            <button type="button" class="@Tw.BtnOutline" @onclick="OpenPhaseModal">
+                                <LucideIcon Name="git-branch" CssClass="h-4 w-4" /> Cambiar fase
+                            </button>
+                            <button type="button" class="@Tw.BtnOutline" @onclick="OpenStatusModal">
+                                <LucideIcon Name="refresh-cw" CssClass="h-4 w-4" /> Actualizar estado
+                            </button>
+                        }
+                        <button type="button" class="@Tw.BtnOutline" @onclick="GoBack">
+                            <LucideIcon Name="arrow-left" CssClass="h-4 w-4" /> Volver
+                        </button>
+                    </div>
+                </div>
+
+                <div class="border-t border-gray-100 px-3 py-2">
+                    <h1 class="@Tw.PageTitle">Tarea #@detail.Task.Id</h1>
+                    <p class="@Tw.PageSubtitle mt-0.5">@GetHeaderSubtitle()</p>
+                    <p class="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-gray-800">
+                        @(string.IsNullOrWhiteSpace(detail.Task.Description) ? "Sin descripción registrada." : detail.Task.Description)
+                    </p>
+                    @if (!detail.Task.IsWithinOriginalScope)
+                    {
+                        <p class="mt-1 text-xs text-amber-800">Motivo fuera de alcance: @GetScopeReasonLabel(detail.Task.ScopeChangeReason)</p>
+                    }
+                </div>
+
+                <div class="flex flex-wrap items-stretch gap-4 border-t border-gray-100 bg-gray-50/40 px-3 py-2.5 sm:items-center">
+                    <div class="flex min-w-[10rem] items-center gap-2">
+                        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-gray-600 shadow-sm ring-1 ring-gray-200">
+                            <LucideIcon Name="user" CssClass="h-4 w-4" />
+                        </span>
+                        <div class="min-w-0">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Responsable</p>
+                            <p class="truncate text-xs font-semibold text-gray-900">@(string.IsNullOrWhiteSpace(detail.Task.Responsible) ? "Sin asignar" : detail.Task.Responsible)</p>
+                        </div>
+                    </div>
+                    <div class="hidden h-8 w-px shrink-0 bg-gray-200 sm:block"></div>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex flex-wrap items-end justify-between gap-x-3 gap-y-0.5">
+                            <div>
+                                <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Horas</p>
+                                <p class="text-xs text-gray-900">
+                                    <span class="@Tw.TextMetric">@detail.Task.TotalHoursWorked</span>
+                                    <span class="text-gray-500"> de @detail.Task.TimeEstimationHours h estimadas</span>
+                                </p>
+                            </div>
+                            <p class="text-xs font-semibold @GetRemainingHoursClass(detail.Task)">
+                                @GetRemainingHoursLabel(detail.Task)
+                            </p>
+                        </div>
+                        <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-gray-200">
+                            <div class="h-full rounded-full transition-all @GetHoursBarClass(detail.Task)"
+                                 style="width: @(GetHoursProgressPercent(detail.Task))%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="@Tw.TabGroupFull" role="tablist">
+                <button type="button" role="tab" class="@(activeSection == "general" ? Tw.TabActiveFull : Tw.TabInactiveFull)" @onclick='() => SelectSection("general")'>
+                    General
+                </button>
+                <button type="button" role="tab" class="@(activeSection == "notes" ? Tw.TabActiveFull : Tw.TabInactiveFull)" @onclick='() => SelectSection("notes")'>
+                    Notas (@notes.Count)
+                </button>
+                <button type="button" role="tab" class="@(activeSection == "history" ? Tw.TabActiveFull : Tw.TabInactiveFull)" @onclick='() => SelectSection("history")'>
+                    Historial
+                </button>
+                <button type="button" role="tab" class="@(activeSection == "bugs" ? Tw.TabActiveFull : Tw.TabInactiveFull)" @onclick='() => SelectSection("bugs")'>
+                    Bugs (@bugs.Count)
+                </button>
+            </div>
+                </div>
+
+            <div class="min-h-0 flex-1 overflow-y-auto">
+            <div class="@Tw.DetailLayoutPadded">
+                <aside class="space-y-3 @Tw.DetailLayoutAside">
+                    <div class="@Tw.Card">
+                        <h2 class="text-xs font-semibold uppercase tracking-wide text-gray-500">Fechas</h2>
+                        <dl class="mt-3 space-y-2 text-xs">
+                            <div class="flex justify-between gap-2">
+                                <dt class="text-gray-500">Inicio</dt>
+                                <dd class="font-medium text-gray-900">@detail.Task.StartDate.ToString("dd-MM-yyyy")</dd>
+                            </div>
+                            <div class="flex justify-between gap-2">
+                                <dt class="text-gray-500">Fin planificado</dt>
+                                <dd class="font-medium text-gray-900">@(detail.Task.EndDate?.ToString("dd-MM-yyyy") ?? "—")</dd>
+                            </div>
+                            <div class="flex justify-between gap-2">
+                                <dt class="text-gray-500">Fin real</dt>
+                                <dd class="font-medium text-gray-900">@(detail.Task.ActualEndDate?.ToString("dd-MM-yyyy") ?? "—")</dd>
+                            </div>
+                        </dl>
+                    </div>
+
+                </aside>
+
+                <main class="@Tw.DetailLayoutMain">
+                    @if (activeSection == "general")
+                    {
+                        <div class="space-y-4">
+                            <div class="@Tw.Card">
+                                <h2 class="@Tw.CardTitle mb-3">Contexto del requerimiento</h2>
+                                <div class="@Tw.FormGridTextXs">
+                                    <DetailRow Label="Cliente" Value="@detail.Task.CustomerDescription" />
+                                    <DetailRow Label="Proyecto" Value="@detail.Task.ProjectDescription" Href="@AppRoutes.ProjectDetail(detail.Task.ProjectId)" />
+                                    <DetailRow Label="Requerimiento" Value="@($"#{detail.Task.RequirementId} — {detail.Task.RequirementDescription}")" Href="@AppRoutes.RequirementDetail(detail.Task.RequirementId)" />
+                                    <DetailRow Label="Estado del requerimiento" Value="@detail.Task.RequirementStatus" />
+                                    <DetailRow Label="Inicio requerimiento" Value="@detail.Task.RequirementStartDate.ToString("dd-MM-yyyy")" />
+                                    <DetailRow Label="Fin requerimiento" Value="@(detail.Task.RequirementEndDate?.ToString("dd-MM-yyyy") ?? "—")" />
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else if (activeSection == "notes")
+                    {
+                        <div class="@Tw.Card">
+                            @if (perms.CanView)
+                            {
+                                <div class="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-2">
+                                    <label class="@Tw.Label">Agregar nota</label>
+                                    <textarea class="@Tw.Textarea min-h-[80px]" @bind="newNoteContent" placeholder="Escriba una nota sobre esta tarea..."></textarea>
+                                    <button type="button" class="@Tw.BtnPrimary" @onclick="SaveNote" disabled="@savingNote">
+                                        Publicar nota
+                                    </button>
+                                </div>
+                            }
+
+                            @if (notes.Count == 0)
+                            {
+                                <p class="text-xs text-gray-500">Sin notas registradas.</p>
+                            }
+                            else
+                            {
+                                <div class="space-y-3">
+                                    @foreach (var note in notes)
+                                    {
+                                        <div class="rounded-lg border border-gray-200 bg-white p-3">
+                                            <div class="flex items-start justify-between gap-2">
+                                                <div class="min-w-0">
+                                                    <p class="text-xs font-medium text-gray-900">@note.Author</p>
+                                                    <p class="text-xs text-gray-500">@note.CreatedAt.ToLocalTime().ToString("dd-MM-yyyy HH:mm")</p>
+                                                </div>
+                                                @if (CanDeleteNote(note))
+                                                {
+                                                    <button type="button" class="@Tw.TableBtn text-red-600 shrink-0" @onclick="() => DeleteNote(note.Id)">Eliminar</button>
+                                                }
+                                            </div>
+                                            <p class="mt-2 whitespace-pre-wrap text-xs text-gray-800">@note.Content</p>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (activeSection == "history")
+                    {
+                        <div class="@Tw.Card">
+                            @if (detail.StatusHistory.Count == 0)
+                            {
+                                <p class="text-xs text-gray-500">Sin cambios de estado registrados.</p>
+                            }
+                            else
+                            {
+                                <div class="@Tw.TableWrap border-0 shadow-none">
+                                    <table class="@Tw.Table">
+                                        <colgroup>
+                                            <col class="w-36" />
+                                            <col class="w-36" />
+                                            <col class="w-36" />
+                                            <col />
+                                            <col class="w-36" />
+                                        </colgroup>
+                                        <thead>
+                                            <tr>
+                                                <th class="@Tw.Th">Fecha</th>
+                                                <th class="@Tw.Th">Estado anterior</th>
+                                                <th class="@Tw.Th">Estado nuevo</th>
+                                                <th class="@Tw.Th">Motivo</th>
+                                                <th class="@Tw.Th">Miembro de equipo</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var entry in detail.StatusHistory)
+                                            {
+                                                <tr class="hover:bg-gray-50">
+                                                    <td class="@Tw.Td whitespace-nowrap">@entry.ChangedAt.ToLocalTime().ToString("dd-MM-yyyy HH:mm")</td>
+                                                    <td class="@Tw.TdText">@(entry.PreviousStatus ?? "—")</td>
+                                                    <td class="@Tw.TdText font-medium">@entry.Status</td>
+                                                    <td class="@Tw.TdText" title="@entry.Reason">@(string.IsNullOrWhiteSpace(entry.Reason) ? "—" : entry.Reason)</td>
+                                                    <td class="@Tw.TdText">@entry.ChangedBy</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (activeSection == "bugs")
+                    {
+                        <div class="@Tw.Card">
+                            <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <h2 class="@Tw.CardTitle">Reportes de bugs</h2>
+                                @if (perms.CanView)
+                                {
+                                    <button type="button" class="@Tw.BtnOutline text-xs" @onclick="ToggleBugForm">
+                                        @(showBugForm ? "Cancelar" : "Nuevo bug")
+                                    </button>
+                                }
+                            </div>
+
+                            @if (showBugForm && perms.CanView)
+                            {
+                                <div class="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-3">
+                                    <div>
+                                        <label class="@Tw.Label">Descripción</label>
+                                        <textarea class="@Tw.Textarea min-h-[80px]" @bind="newBugDescription" placeholder="Describa el bug encontrado"></textarea>
+                                    </div>
+                                    <div>
+                                        <label class="@Tw.Label">Estado</label>
+                                        <select class="@Tw.Select" @bind="newBugStatusId">
+                                            @foreach (var status in bugStatuses)
+                                            {
+                                                <option value="@status.Id">@status.Description</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="@Tw.Label">Imágenes</label>
+                                        <p class="mb-1 text-xs text-gray-500">Adjunte capturas del bug (máx. 512 KB c/u, formatos de imagen).</p>
+                                        <InputFile OnChange="HandleBugFileChanged" multiple accept="image/*" class="text-xs" />
+                                        @if (newBugFiles.Count > 0)
+                                        {
+                                            <ul class="mt-2 space-y-1 text-xs text-gray-700">
+                                                @foreach (var file in newBugFiles)
+                                                {
+                                                    <li class="flex items-center gap-2">
+                                                        <span>@file.Name</span>
+                                                        <button type="button" class="@Tw.TableBtn" @onclick="() => RemoveBugFile(file)">Quitar</button>
+                                                    </li>
+                                                }
+                                            </ul>
+                                        }
+                                    </div>
+                                    <button type="button" class="@Tw.BtnPrimary" @onclick="SaveNewBug" disabled="@savingBug">
+                                        Reportar bug
+                                    </button>
+                                </div>
+                            }
+
+                            @if (bugs.Count == 0)
+                            {
+                                <p class="text-xs text-gray-500">No hay bugs reportados para esta tarea.</p>
+                            }
+                            else
+                            {
+                                <div class="@Tw.TableWrap border-0 shadow-none">
+                                    <table class="@Tw.Table table-fixed">
+                                        <colgroup>
+                                            <col class="w-32" />
+                                            <col class="w-36" />
+                                            <col class="w-36" />
+                                            <col />
+                                            <col class="w-40" />
+                                            @if (perms.CanEdit)
+                                            {
+                                                <col class="w-48" />
+                                            }
+                                        </colgroup>
+                                        <thead>
+                                            <tr>
+                                                <th class="@Tw.Th">Fecha</th>
+                                                <th class="@Tw.Th">Reportado por</th>
+                                                <th class="@Tw.Th">Estado</th>
+                                                <th class="@Tw.Th">Descripción</th>
+                                                <th class="@Tw.Th">Imágenes</th>
+                                                @if (perms.CanEdit)
+                                                {
+                                                    <th class="@Tw.ThActionsAuto"></th>
+                                                }
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var bug in bugs)
+                                            {
+                                                <tr class="align-top hover:bg-gray-50">
+                                                    <td class="@Tw.Td whitespace-nowrap">@bug.ReportedAt.ToLocalTime().ToString("dd-MM-yyyy HH:mm")</td>
+                                                    <td class="@Tw.TdText">@bug.ReportedBy</td>
+                                                    <td class="@Tw.Td">
+                                                        @if (perms.CanEdit && editingBugId == bug.Id)
+                                                        {
+                                                            <select class="@Tw.Select text-xs" @bind="editBugStatusId">
+                                                                @foreach (var status in bugStatuses)
+                                                                {
+                                                                    <option value="@status.Id">@status.Description</option>
+                                                                }
+                                                            </select>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span class="@(StatusBadgeHelper.TableBadgeBase + "font-medium bg-amber-50 text-amber-800")">@bug.Status</span>
+                                                        }
+                                                    </td>
+                                                    <td class="@Tw.TdText">
+                                                        @if (perms.CanEdit && editingBugId == bug.Id)
+                                                        {
+                                                            <textarea class="@Tw.Textarea min-h-[56px] text-xs" @bind="editBugDescription"></textarea>
+                                                        }
+                                                        else
+                                                        {
+                                                            @bug.Description
+                                                        }
+                                                    </td>
+                                                    <td class="@Tw.Td">
+                                                        @if (bug.Attachments.Count == 0)
+                                                        {
+                                                            <span class="text-xs text-gray-400">—</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="flex flex-col gap-1">
+                                                                @foreach (var attachment in bug.Attachments)
+                                                                {
+                                                                    <button type="button" class="@Tw.TableBtn text-left text-xs" @onclick="() => DownloadBugAttachment(attachment.Id, attachment.FileName)">
+                                                                        @attachment.FileName
+                                                                    </button>
+                                                                }
+                                                            </div>
+                                                        }
+                                                    </td>
+                                                    @if (perms.CanEdit)
+                                                    {
+                                                        <td class="@Tw.TdActionsAuto">
+                                                            @if (editingBugId == bug.Id)
+                                                            {
+                                                                <button type="button" class="@Tw.TableBtn" @onclick="() => SaveBugEdit(bug.Id)" disabled="@savingBug">Guardar</button>
+                                                                <button type="button" class="@Tw.TableBtn" @onclick="CancelBugEdit">Cancelar</button>
+                                                            }
+                                                            else
+                                                            {
+                                                                <TableRowActionsMenu>
+                                                                    @if (perms.CanEdit)
+                                                                    {
+                                                                        <TableRowAction Label="Editar" OnClick="@(() => StartBugEdit(bug))" />
+                                                                    }
+                                                                    @if (perms.CanDelete)
+                                                                    {
+                                                                        <TableRowAction Label="Eliminar" Danger OnClick="@(() => DeleteBug(bug.Id))" />
+                                                                    }
+                                                                </TableRowActionsMenu>
+                                                            }
+                                                        </td>
+                                                    }
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </div>
+                    }
+                </main>
+            </div>
+            </div>
+            </div>
+
+            @if (showStatusModal)
+            {
+            <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-3" @onclick="CloseStatusModal">
+                    <div class="w-full max-w-md rounded-lg border border-gray-200 bg-white shadow-lg" @onclick:stopPropagation="true">
+                        <div class="flex items-start justify-between gap-2 border-b border-gray-100 px-3 py-2">
+                            <div class="min-w-0">
+                                <h3 class="text-xs font-semibold text-gray-900">Actualizar estado</h3>
+                                <p class="truncate text-xs text-gray-500">Tarea #@detail.Task.Id — @detail.Task.TaskStatus</p>
+                            </div>
+                            <button type="button" class="shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600" @onclick="CloseStatusModal" aria-label="Cerrar">
+                                <LucideIcon Name="x" CssClass="h-4 w-4" />
+                            </button>
+                        </div>
+                        <div class="space-y-2.5 px-3 py-2.5">
+                            <div>
+                                <label class="@Tw.Label">Estado de la tarea</label>
+                                <select class="@Tw.Select" value="@selectedStatusId" @onchange="OnStatusSelectionChanged">
+                                    @foreach (var status in GetSelectableTaskStatuses())
+                                    {
+                                        <option value="@status.Id">@status.Description</option>
+                                    }
+                                </select>
+                            </div>
+                            @if (RequiresBlockReason(selectedStatusId))
+                            {
+                                <div>
+                                    <label class="@Tw.Label">Motivo del bloqueo</label>
+                                    <textarea class="@Tw.Textarea min-h-[72px]" @bind="statusChangeReason" placeholder="Motivo del bloqueo (obligatorio)"></textarea>
+                                </div>
+                            }
+                        </div>
+                        <div class="flex justify-end gap-1.5 border-t border-gray-100 px-3 py-2">
+                            <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2.5 text-xs")" @onclick="CloseStatusModal">Cancelar</button>
+                            <button type="button" class="@($"{Tw.BtnPrimary} !py-1 !px-2.5 text-xs")" @onclick="SaveStatusChange" disabled="@savingStatus">Guardar</button>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            @if (showPhaseModal)
+            {
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3" @onclick="ClosePhaseModal">
+                    <div class="w-full max-w-md rounded-lg border border-gray-200 bg-white shadow-lg" @onclick:stopPropagation="true">
+                        <div class="flex items-start justify-between gap-2 border-b border-gray-100 px-3 py-2">
+                            <div class="min-w-0">
+                                <h3 class="text-xs font-semibold text-gray-900">Cambiar fase de desarrollo</h3>
+                                <p class="truncate text-xs text-gray-500">Tarea #@detail.Task.Id — @(string.IsNullOrWhiteSpace(detail.Task.DevelopmentPhase) ? "Sin fase" : detail.Task.DevelopmentPhase)</p>
+                            </div>
+                            <button type="button" class="shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600" @onclick="ClosePhaseModal" aria-label="Cerrar">
+                                <LucideIcon Name="x" CssClass="h-4 w-4" />
+                            </button>
+                        </div>
+                        <div class="px-3 py-2.5">
+                            <label class="@Tw.Label">Fase de desarrollo</label>
+                            <select class="@Tw.Select" @bind="selectedDevelopmentPhaseId">
+                                @foreach (var phase in GetSelectablePhases())
+                                {
+                                    <option value="@phase.Id">@phase.Description</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="flex justify-end gap-1.5 border-t border-gray-100 px-3 py-2">
+                            <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2.5 text-xs")" @onclick="ClosePhaseModal">Cancelar</button>
+                            <button type="button" class="@($"{Tw.BtnPrimary} !py-1 !px-2.5 text-xs")" @onclick="SavePhaseChange" disabled="@savingPhase">Guardar</button>
+                        </div>
+                    </div>
+                </div>
+            }
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public long TaskId { get; set; }
+
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private TaskDetailReadResponse? detail;
+    private List<GestionProyectos.Data.Entities.TaskManagement.TaskStatus> taskStatuses = new();
+    private List<TaskBugStatus> bugStatuses = new();
+    private List<TaskDevelopmentPhase> developmentPhases = new();
+    private List<TaskBugItem> bugs = new();
+    private List<TaskNoteItem> notes = new();
+    private long selectedStatusId;
+    private long selectedDevelopmentPhaseId;
+    private string statusChangeReason = string.Empty;
+    private bool loading = true;
+    private bool savingStatus;
+    private bool savingPhase;
+    private bool showStatusModal;
+    private bool showPhaseModal;
+    private bool savingBug;
+    private bool savingNote;
+    private bool showBugForm;
+    private string newNoteContent = string.Empty;
+    private string newBugDescription = string.Empty;
+    private long newBugStatusId;
+    private List<IBrowserFile> newBugFiles = new();
+    private long editingBugId;
+    private string editBugDescription = string.Empty;
+    private long editBugStatusId;
+    private string? errorMessage;
+    private string activeSection = "general";
+    private long lastLoadedTaskId;
+    private bool initialized;
+
+    private void SelectSection(string section) => activeSection = section;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/task-management");
+        taskStatuses = catalogEngine.GetTaskStatuses().Data ?? new();
+        bugStatuses = catalogEngine.GetTaskBugStatuses().Data ?? new();
+        developmentPhases = catalogEngine.GetTaskDevelopmentPhases().Data ?? new();
+        if (bugStatuses.Count > 0)
+            newBugStatusId = bugStatuses[0].Id;
+
+        initialized = true;
+
+        if (TaskId > 0)
+            await LoadDetail();
+        else
+            loading = false;
+    }
+
+    protected override async System.Threading.Tasks.Task OnParametersSetAsync()
+    {
+        if (!initialized || TaskId <= 0 || TaskId == lastLoadedTaskId)
+            return;
+
+        await LoadDetail();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!loading && (detail != null || !string.IsNullOrEmpty(errorMessage)))
+            await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    private async System.Threading.Tasks.Task LoadDetail()
+    {
+        loading = true;
+        errorMessage = null;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var response = taskDetailReadEngine.Execute(new TaskDetailReadRequest
+            {
+                TaskId = TaskId,
+                Context = context
+            });
+
+            if (!response.Success)
+            {
+                errorMessage = response.Message.Description;
+                detail = null;
+                lastLoadedTaskId = 0;
+                return;
+            }
+
+            detail = response.Data;
+            if (detail == null)
+            {
+                errorMessage = "No se encontró el detalle de la tarea.";
+                lastLoadedTaskId = 0;
+                return;
+            }
+
+            lastLoadedTaskId = TaskId;
+            selectedStatusId = detail.Task.TaskStatusId;
+            selectedDevelopmentPhaseId = detail.Task.DevelopmentPhaseId;
+            statusChangeReason = string.Empty;
+            editingBugId = 0;
+            LoadBugs();
+            LoadNotes();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = string.IsNullOrWhiteSpace(ex.Message)
+                ? "No se pudo cargar el detalle de la tarea."
+                : ex.Message;
+            detail = null;
+            lastLoadedTaskId = 0;
+        }
+        finally
+        {
+            loading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void LoadBugs()
+    {
+        bugs = new();
+        var response = taskBugEngine.GetBugs(new TaskBugListRequest
+        {
+            TaskId = TaskId,
+            Context = context
+        });
+
+        if (response.Success && response.Data != null)
+            bugs = response.Data.Bugs;
+    }
+
+    private void LoadNotes()
+    {
+        notes = new();
+        var response = taskNoteEngine.GetNotes(new TaskNoteListRequest
+        {
+            TaskId = TaskId,
+            Context = context
+        });
+
+        if (response.Success && response.Data != null)
+            notes = response.Data.Notes;
+    }
+
+    private void OpenStatusModal()
+    {
+        if (detail == null) return;
+        selectedStatusId = detail.Task.TaskStatusId;
+        statusChangeReason = string.Empty;
+        showStatusModal = true;
+    }
+
+    private void OnStatusSelectionChanged(ChangeEventArgs e)
+    {
+        selectedStatusId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        if (!RequiresBlockReason(selectedStatusId))
+            statusChangeReason = string.Empty;
+    }
+
+    private void CloseStatusModal()
+    {
+        showStatusModal = false;
+        statusChangeReason = string.Empty;
+        if (detail != null)
+            selectedStatusId = detail.Task.TaskStatusId;
+    }
+
+    private void OpenPhaseModal()
+    {
+        if (detail == null) return;
+        selectedDevelopmentPhaseId = detail.Task.DevelopmentPhaseId;
+        showPhaseModal = true;
+    }
+
+    private void ClosePhaseModal()
+    {
+        showPhaseModal = false;
+        if (detail != null)
+            selectedDevelopmentPhaseId = detail.Task.DevelopmentPhaseId;
+    }
+
+    private async System.Threading.Tasks.Task SaveStatusChange()
+    {
+        if (detail == null) return;
+        if (selectedStatusId == detail.Task.TaskStatusId) return;
+
+        if (RequiresBlockReason(selectedStatusId) && string.IsNullOrWhiteSpace(statusChangeReason))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "Indique el motivo del bloqueo.");
+            return;
+        }
+
+        savingStatus = true;
+        var response = taskUpdateEngine.Execute(new TaskUpdateRequest
+        {
+            Id = detail.Task.Id,
+            TicketId = detail.Task.RequirementId,
+            Description = detail.Task.Description,
+            TimeEstimationHours = detail.Task.TimeEstimationHours,
+            TaskStatusId = selectedStatusId,
+            DevelopmentPhaseId = detail.Task.DevelopmentPhaseId,
+            IsWithinOriginalScope = detail.Task.IsWithinOriginalScope,
+            ScopeChangeReason = detail.Task.ScopeChangeReason,
+            StatusChangeReason = statusChangeReason,
+            Context = context
+        });
+        savingStatus = false;
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        CloseStatusModal();
+        lastLoadedTaskId = 0;
+        await LoadDetail();
+    }
+
+    private async System.Threading.Tasks.Task SavePhaseChange()
+    {
+        if (detail == null) return;
+        if (selectedDevelopmentPhaseId == detail.Task.DevelopmentPhaseId) return;
+
+        savingPhase = true;
+        var response = taskUpdateEngine.Execute(new TaskUpdateRequest
+        {
+            Id = detail.Task.Id,
+            TicketId = detail.Task.RequirementId,
+            Description = detail.Task.Description,
+            TimeEstimationHours = detail.Task.TimeEstimationHours,
+            TaskStatusId = detail.Task.TaskStatusId,
+            DevelopmentPhaseId = selectedDevelopmentPhaseId,
+            IsWithinOriginalScope = detail.Task.IsWithinOriginalScope,
+            ScopeChangeReason = detail.Task.ScopeChangeReason,
+            StatusChangeReason = string.Empty,
+            Context = context
+        });
+        savingPhase = false;
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        ClosePhaseModal();
+        lastLoadedTaskId = 0;
+        await LoadDetail();
+    }
+
+    private void GoBack() => NavigationManager.NavigateTo("/task-management");
+
+    private string GetHeaderSubtitle()
+    {
+        if (detail == null) return string.Empty;
+        return $"{detail.Task.CustomerDescription} · {detail.Task.ProjectDescription} · Req. #{detail.Task.RequirementId} — {detail.Task.RequirementDescription}";
+    }
+
+    private static int GetHoursProgressPercent(TaskDetailInfo task)
+    {
+        if (task.TimeEstimationHours <= 0) return task.TotalHoursWorked > 0 ? 100 : 0;
+        var percent = (double)(task.TotalHoursWorked / task.TimeEstimationHours * 100);
+        return (int)Math.Min(100, Math.Max(0, Math.Round(percent)));
+    }
+
+    private static string GetHoursBarClass(TaskDetailInfo task)
+    {
+        var remaining = GetRemainingHours(task);
+        if (remaining < 0) return "bg-red-500";
+        if (remaining == 0) return "bg-green-500";
+        return "bg-primary-600";
+    }
+
+    private static string GetRemainingHoursLabel(TaskDetailInfo task)
+    {
+        var remaining = GetRemainingHours(task);
+        if (remaining < 0) return $"{Math.Abs(remaining):0.#} h de más";
+        if (remaining == 0) return "Completado";
+        return $"{remaining:0.#} h pendientes";
+    }
+
+    private bool RequiresBlockReason(long statusId)
+    {
+        var status = taskStatuses.FirstOrDefault(s => s.Id == statusId);
+        return TaskStatusHelper.RequiresBlockReason(status?.Description);
+    }
+
+    private IEnumerable<GestionProyectos.Data.Entities.TaskManagement.TaskStatus> GetSelectableTaskStatuses()
+    {
+        var currentStatusId = detail?.Task.TaskStatusId ?? 0;
+        foreach (var status in taskStatuses)
+        {
+            if (!perms.CanFinalize &&
+                FinalizeStatusHelper.IsTaskFinalized(status.Description) &&
+                status.Id != currentStatusId)
+                continue;
+
+            yield return status;
+        }
+    }
+
+    private IEnumerable<TaskDevelopmentPhase> GetSelectablePhases()
+    {
+        if (detail == null)
+            return developmentPhases;
+
+        var current = developmentPhases.FirstOrDefault(p => p.Id == detail.Task.DevelopmentPhaseId);
+        var currentOrder = current?.Order ?? 1;
+
+        if (currentOrder >= TaskPhaseHelper.QaPhaseOrder)
+            return developmentPhases.Where(p => p.Order >= TaskPhaseHelper.QaPhaseOrder);
+
+        return developmentPhases;
+    }
+
+    private static string GetScopeLabel(bool withinScope) =>
+        withinScope ? "Dentro del alcance" : "Fuera del alcance";
+
+    private static string GetScopeBadgeClass(bool withinScope) =>
+        StatusBadgeHelper.TableBadgeBase + "font-semibold " +
+        (withinScope ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800");
+
+    private static string GetPhaseBadgeClass() =>
+        StatusBadgeHelper.TableBadgeBase + "max-w-full truncate font-semibold whitespace-nowrap bg-indigo-50 text-indigo-800";
+
+    private static string GetScopeReasonLabel(short? reason) => reason switch
+    {
+        (short)TaskScopeChangeReason.Internal => "Omisión interna",
+        (short)TaskScopeChangeReason.External => "Cambio externo",
+        _ => "—"
+    };
+
+    private static decimal GetRemainingHours(TaskDetailInfo task) =>
+        task.TimeEstimationHours - task.TotalHoursWorked;
+
+    private static string GetRemainingHoursClass(TaskDetailInfo task)
+    {
+        var remaining = GetRemainingHours(task);
+        if (remaining < 0) return "text-red-600";
+        if (remaining == 0) return "text-green-600";
+        return "text-gray-900";
+    }
+
+    private bool CanDeleteNote(TaskNoteItem note) =>
+        note.AuthorUserId == context.UserId ||
+        context.Role?.Equals("Administrador", StringComparison.OrdinalIgnoreCase) == true;
+
+    private async System.Threading.Tasks.Task SaveNote()
+    {
+        if (string.IsNullOrWhiteSpace(newNoteContent))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "Escriba el contenido de la nota.");
+            return;
+        }
+
+        savingNote = true;
+        var response = taskNoteEngine.SaveNote(new TaskNoteSaveRequest
+        {
+            TaskId = TaskId,
+            Content = newNoteContent,
+            Context = context
+        });
+        savingNote = false;
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        newNoteContent = string.Empty;
+        LoadNotes();
+        if (detail != null)
+            detail.Task.NoteCount = notes.Count;
+    }
+
+    private async System.Threading.Tasks.Task DeleteNote(long noteId)
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", "¿Eliminar esta nota?"))
+            return;
+
+        var response = taskNoteEngine.DeleteNote(new TaskNoteDeleteRequest
+        {
+            Id = noteId,
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        LoadNotes();
+        if (detail != null)
+            detail.Task.NoteCount = notes.Count;
+    }
+
+    private void ToggleBugForm()
+    {
+        showBugForm = !showBugForm;
+        if (!showBugForm)
+        {
+            newBugDescription = string.Empty;
+            newBugFiles.Clear();
+            if (bugStatuses.Count > 0)
+                newBugStatusId = bugStatuses[0].Id;
+        }
+    }
+
+    private void HandleBugFileChanged(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles())
+        {
+            if (file.Size <= 512000)
+                newBugFiles.Add(file);
+            else
+                JSRuntime.InvokeVoidAsync("alert", "El archivo supera 512 KB.");
+        }
+    }
+
+    private void RemoveBugFile(IBrowserFile file) => newBugFiles.Remove(file);
+
+    private List<FileItem> BuildBugFiles() => newBugFiles.Select(file => new FileItem
+    {
+        Name = file.Name,
+        File = file.OpenReadStream(maxAllowedSize: 512000)
+    }).ToList();
+
+    private async System.Threading.Tasks.Task SaveNewBug()
+    {
+        if (string.IsNullOrWhiteSpace(newBugDescription))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "Indique la descripción del bug.");
+            return;
+        }
+
+        savingBug = true;
+        var response = taskBugEngine.SaveBug(new TaskBugSaveRequest
+        {
+            RequirementId = detail!.Task.RequirementId,
+            TaskId = TaskId,
+            Description = newBugDescription,
+            TaskBugStatusId = newBugStatusId,
+            Files = BuildBugFiles(),
+            Context = context
+        });
+        savingBug = false;
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        newBugDescription = string.Empty;
+        newBugFiles.Clear();
+        showBugForm = false;
+        if (bugStatuses.Count > 0)
+            newBugStatusId = bugStatuses[0].Id;
+        LoadBugs();
+    }
+
+    private void StartBugEdit(TaskBugItem bug)
+    {
+        editingBugId = bug.Id;
+        editBugDescription = bug.Description;
+        editBugStatusId = bug.TaskBugStatusId;
+    }
+
+    private void CancelBugEdit()
+    {
+        editingBugId = 0;
+        editBugDescription = string.Empty;
+    }
+
+    private async System.Threading.Tasks.Task SaveBugEdit(long bugId)
+    {
+        if (string.IsNullOrWhiteSpace(editBugDescription))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "La descripción no puede estar vacía.");
+            return;
+        }
+
+        savingBug = true;
+        var response = taskBugEngine.SaveBug(new TaskBugSaveRequest
+        {
+            Id = bugId,
+            RequirementId = detail!.Task.RequirementId,
+            TaskId = TaskId,
+            Description = editBugDescription,
+            TaskBugStatusId = editBugStatusId,
+            Context = context
+        });
+        savingBug = false;
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        editingBugId = 0;
+        LoadBugs();
+    }
+
+    private async System.Threading.Tasks.Task DeleteBug(long bugId)
+    {
+        if (!perms.CanDelete) return;
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", "¿Eliminar este reporte de bug?"))
+            return;
+
+        var response = taskBugEngine.DeleteBug(new TaskBugDeleteRequest
+        {
+            Id = bugId,
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        if (editingBugId == bugId)
+            CancelBugEdit();
+        LoadBugs();
+    }
+
+    private async System.Threading.Tasks.Task DownloadBugAttachment(long attachmentId, string fileName)
+    {
+        var response = taskBugEngine.DownloadAttachment(new TaskBugDownloadRequest
+        {
+            AttachmentId = attachmentId,
+            Context = context
+        });
+
+        if (!response.Success || response.Data == null)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message?.Description ?? "No se pudo descargar el archivo.");
+            return;
+        }
+
+        var base64 = Convert.ToBase64String(response.Data.File);
+        await JSRuntime.InvokeVoidAsync("descargarArchivo", fileName, base64);
+    }
+}

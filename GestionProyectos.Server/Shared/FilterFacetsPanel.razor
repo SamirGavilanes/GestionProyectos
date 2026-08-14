@@ -1,0 +1,49 @@
+﻿<aside class="@Tw.FacetPanel">
+    <div class="@Tw.FacetPanelHeader">
+        <div class="@Tw.FacetPanelHeaderBrand">
+            <LucideIcon Name="sliders-horizontal" CssClass="h-3 w-3 shrink-0 text-primary-600" />
+            <span class="truncate">Filtros</span>
+            @if (ActiveCount > 0)
+            {
+                <span class="@Tw.FacetPanelBadge">
+                    @ActiveCount
+                </span>
+            }
+        </div>
+        @if (OnClose.HasDelegate)
+        {
+            <button type="button"
+                    class="@Tw.FacetPanelClose lg:hidden"
+                    aria-label="Cerrar filtros"
+                    @onclick="OnClose">
+                <LucideIcon Name="x" CssClass="h-3.5 w-3.5" />
+            </button>
+        }
+    </div>
+    <div class="@Tw.FacetPanelBody">
+        @ChildContent
+    </div>
+    @if (Footer != null || OnClear.HasDelegate)
+    {
+        <div class="@Tw.FacetPanelFooter">
+            @if (OnClear.HasDelegate)
+            {
+                <button type="button"
+                        class="@($"{Tw.BtnOutline} {Tw.FacetPanelClearBtn}")"
+                        disabled="@(ActiveCount == 0)"
+                        @onclick="OnClear">
+                    Limpiar filtros
+                </button>
+            }
+            @Footer
+        </div>
+    }
+</aside>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    [Parameter] public int ActiveCount { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnClear { get; set; }
+}

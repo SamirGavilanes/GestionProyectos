@@ -1,0 +1,122 @@
+@using GestionProyectos.Server.Helpers
+@using GestionProyectos.Server.Models
+
+<div class="@Tw.FacetOptionList">
+    @foreach (var option in DatePeriodHelper.Options)
+    {
+        var selected = Preset == option.Preset;
+        <label class="@Tw.FacetOptionItem">
+            <input type="radio"
+                   name="@_radioGroupName"
+                   class="@Tw.FacetOptionCheckbox"
+                   checked="@selected"
+                   @onchange="() => SelectPresetAsync(option.Preset)" />
+            <span class="@Tw.FacetOptionLabel">@option.Label</span>
+            <span class="@Tw.FacetOptionCount">(@GetCount(option.Preset))</span>
+        </label>
+    }
+</div>
+
+@if (Preset == DatePeriodPreset.Custom)
+{
+    <FacetField Label="Desde">
+        <input type="date"
+               class="@Tw.FacetDate"
+               value="@StartDate.ToString("yyyy-MM-dd")"
+               @onchange="OnStartDateChange" />
+    </FacetField>
+    <FacetField Label="Hasta">
+        <input type="date"
+               class="@Tw.FacetDate"
+               value="@EndDate.ToString("yyyy-MM-dd")"
+               @onchange="OnEndDateChange" />
+    </FacetField>
+}
+
+@code {
+    private readonly string _radioGroupName = $"date-period-{Guid.NewGuid():N}";
+
+    [Parameter] public DateTime StartDate { get; set; }
+    [Parameter] public EventCallback<DateTime> StartDateChanged { get; set; }
+    [Parameter] public DateTime EndDate { get; set; }
+    [Parameter] public EventCallback<DateTime> EndDateChanged { get; set; }
+    [Parameter] public DatePeriodPreset Preset { get; set; } = DatePeriodHelper.DefaultPreset;
+    [Parameter] public EventCallback<DatePeriodPreset> PresetChanged { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+    [Parameter] public IReadOnlyDictionary<DatePeriodPreset, int>? Counts { get; set; }
+
+    private int GetCount(DatePeriodPreset preset) =>
+        Counts != null && Counts.TryGetValue(preset, out var count) ? count : 0;
+
+    private async System.Threading.Tasks.Task SelectPresetAsync(DatePeriodPreset preset)
+    {
+        if (Preset == preset)
+            return;
+
+        Preset = preset;
+        if (preset != DatePeriodPreset.Custom)
+        {
+            var (start, end) = DatePeriodHelper.GetRange(preset);
+            StartDate = start;
+            EndDate = end;
+
+            if (StartDateChanged.HasDelegate)
+                await StartDateChanged.InvokeAsync(StartDate);
+            if (EndDateChanged.HasDelegate)
+                await EndDateChanged.InvokeAsync(EndDate);
+        }
+
+        if (PresetChanged.HasDelegate)
+            await PresetChanged.InvokeAsync(Preset);
+
+        await NotifyChangedAsync();
+    }
+
+    private async System.Threading.Tasks.Task OnStartDateChange(ChangeEventArgs e)
+    {
+        if (!DateTime.TryParse(e.Value?.ToString(), out var date))
+            return;
+
+        StartDate = date.Date;
+        if (EndDate < StartDate)
+            EndDate = StartDate;
+
+        Preset = DatePeriodPreset.Custom;
+
+        if (StartDateChanged.HasDelegate)
+            await StartDateChanged.InvokeAsync(StartDate);
+        if (EndDateChanged.HasDelegate)
+            await EndDateChanged.InvokeAsync(EndDate);
+        if (PresetChanged.HasDelegate)
+            await PresetChanged.InvokeAsync(Preset);
+
+        await NotifyChangedAsync();
+    }
+
+    private async System.Threading.Tasks.Task OnEndDateChange(ChangeEventArgs e)
+    {
+        if (!DateTime.TryParse(e.Value?.ToString(), out var date))
+            return;
+
+        EndDate = date.Date;
+        if (EndDate < StartDate)
+            StartDate = EndDate;
+
+        Preset = DatePeriodPreset.Custom;
+
+        if (StartDateChanged.HasDelegate)
+            await StartDateChanged.InvokeAsync(StartDate);
+        if (EndDateChanged.HasDelegate)
+            await EndDateChanged.InvokeAsync(EndDate);
+        if (PresetChanged.HasDelegate)
+            await PresetChanged.InvokeAsync(Preset);
+
+        await NotifyChangedAsync();
+    }
+
+    private async System.Threading.Tasks.Task NotifyChangedAsync()
+    {
+        if (OnChanged.HasDelegate)
+            await OnChanged.InvokeAsync();
+    }
+}

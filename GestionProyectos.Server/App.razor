@@ -1,0 +1,29 @@
+﻿@using GestionProyectos.Server.Pages;
+@using Microsoft.AspNetCore.Components.Authorization
+@inject NavigationManager navigationManager
+
+<CascadingAuthenticationState>
+    <Router AppAssembly="@typeof(App).Assembly">
+        <Found Context="routeData">
+            <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)">
+                <NotAuthorized>
+                    @{
+                        if (context.User.Identity?.IsAuthenticated != true)
+                            navigationManager.NavigateTo("/");
+                        else
+                        {
+                            <p class="alert alert-danger">No está autorizado para ver esta página</p>
+                        }
+                    }
+                </NotAuthorized>
+            </AuthorizeRouteView>
+            @*<FocusOnNavigate RouteData="@routeData" Selector="h1" />*@
+        </Found>
+        <NotFound>
+            <PageTitle>Not found</PageTitle>
+            <LayoutView Layout="@typeof(LoginLayout)">
+                <p role="alert">La página no existe.</p>
+            </LayoutView>
+        </NotFound>
+    </Router>
+</CascadingAuthenticationState>

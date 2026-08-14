@@ -1,0 +1,14 @@
+<div class="@Tw.FacetField">
+    @if (!string.IsNullOrWhiteSpace(Label))
+    {
+        <span class="@Tw.FacetLabel">@Label</span>
+    }
+    <div class="@Tw.FacetControl">
+        @ChildContent
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

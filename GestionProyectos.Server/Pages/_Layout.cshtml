@@ -1,0 +1,138 @@
+﻿@using Microsoft.AspNetCore.Components.Web
+
+
+
+@namespace GestionProyectos.Server.Pages
+
+
+
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+
+
+
+<!DOCTYPE html>
+
+<html lang="es">
+
+<head>
+
+    <meta charset="utf-8" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <base href="~/" />
+
+    <link href="css/app.css" rel="stylesheet" />
+
+    <link href="css/site.css" rel="stylesheet" />
+
+    <link rel="stylesheet" href="lib/jquery-ui/jquery-ui.min.css" />
+    <link rel="stylesheet" href="lib/pivottable/pivot.min.css" />
+
+    <script src="lib/tailwind/tailwindcdn.js"></script>
+
+    <script>
+
+        tailwind.config = {
+
+            theme: {
+
+                extend: {
+
+                    colors: {
+
+                        primary: {
+
+                            DEFAULT: '#1d4ed8',
+
+                            50: '#eff6ff',
+
+                            100: '#dbeafe',
+
+                            200: '#bfdbfe',
+
+                            500: '#3b82f6',
+
+                            600: '#2563eb',
+
+                            700: '#1d4ed8',
+
+                            800: '#1e40af',
+
+                            900: '#1e3a8a',
+
+                        },
+
+                        secondary: {
+
+                            DEFAULT: '#0f766e',
+
+                            50: '#f0fdfa',
+
+                            100: '#ccfbf1',
+
+                            200: '#99f6e4',
+
+                            500: '#14b8a6',
+
+                            600: '#0d9488',
+
+                            700: '#0f766e',
+
+                            800: '#115e59',
+
+                            900: '#134e4a',
+
+                        }
+
+                    }
+
+                }
+
+            }
+
+        }
+
+    </script>
+
+    <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
+
+</head>
+
+<body class="bg-gray-50 text-xs text-gray-800 antialiased">
+
+    @RenderBody()
+
+    <script src="lib/lucide/lucide.min.js"></script>
+
+    <script src="_framework/blazor.server.js"></script>
+
+    <script src="js/icons.js"></script>
+    <script src="js/table-actions-menu.js"></script>
+
+    <script src="js/download.js"></script>
+
+    <script src="js/functions.js"></script>
+
+    <script src="lib/chart.js/chart.umd.min.js"></script>
+
+    <script src="js/burndown.js"></script>
+
+    <script src="js/performance-chart.js"></script>
+
+    <script src="js/dashboard-chart.js"></script>
+    <script src="js/project-metrics-chart.js"></script>
+
+    <script src="js/kanban.js"></script>
+
+    <script src="lib/jquery/jquery.min.js"></script>
+    <script src="lib/jquery-ui/jquery-ui.min.js"></script>
+    <script src="lib/pivottable/pivot.min.js"></script>
+    <script src="lib/pivottable/pivot.es.min.js"></script>
+    <script src="js/billing-pivot.js"></script>
+
+</body>
+
+</html>
+
+

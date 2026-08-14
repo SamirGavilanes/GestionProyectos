@@ -1,0 +1,21 @@
+﻿@page
+@model GestionProyectos.Server.Pages.ErrorModel
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Error</title>
+    <script src="lib/tailwind/tailwindcdn.js"></script>
+    <link href="css/app.css" rel="stylesheet" asp-append-version="true" />
+</head>
+<body class="bg-gray-50 p-6 text-xs">
+    <h1 class="text-xs font-semibold text-red-600">Error</h1>
+    <p class="text-gray-600">Ocurrió un error al procesar la solicitud.</p>
+    @if (Model.ShowRequestId)
+    {
+        <p class="mt-2 text-xs text-gray-500"><strong>Request ID:</strong> <code>@Model.RequestId</code></p>
+    }
+</body>
+</html>

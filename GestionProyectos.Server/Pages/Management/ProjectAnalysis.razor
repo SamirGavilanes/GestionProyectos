@@ -1,0 +1,443 @@
+@page "/project-analysis/{ProjectId:long}"
+@inject IJSRuntime JSRuntime
+@inject IProjectBurndownEngine projectBurndownEngine
+@inject IProjectDetailReadEngine projectDetailReadEngine
+@inject ICatalogEngine catalogEngine
+@inject ISessionStorageService session
+@inject NavigationManager NavigationManager
+
+@using System.Globalization
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.Security
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature.Project.Burndown
+@using GestionProyectos.Engine.Feature.Project.Burndown.Response
+@using GestionProyectos.Engine.Feature.Project.Detail
+@using GestionProyectos.Engine.Feature.Project.Detail.Request
+@using GestionProyectos.Engine.Feature.Project.Detail.Response
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+@implements IAsyncDisposable
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/project-list">
+        @if (loading)
+        {
+            <p class="text-xs text-gray-500">Cargando análisis...</p>
+        }
+        else if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">@errorMessage</div>
+        }
+        else if (detail != null)
+        {
+            <PageHeader Title="@($"Análisis · {detail.Project.Description}")"
+                        Subtitle="@GetPageSubtitle()"
+                        ShowFacetsToggle="true"
+                        FacetsVisible="showFacets"
+                        FacetsVisibleChanged="@(v => showFacets = v)"
+                        ActiveFilterCount="@GetActiveFilterCount()">
+                <Actions>
+                    <ListPageToolbar OnRefresh="RefreshAsync" Refreshing="@loading">
+                        <LeadingContent>
+                            <button type="button" class="@Tw.BtnOutline" @onclick="GoToDetail">
+                                Ir al detalle
+                            </button>
+                        </LeadingContent>
+                    </ListPageToolbar>
+                </Actions>
+            </PageHeader>
+
+            <FilteredPageLayout FacetsVisible="showFacets"
+                                FacetsVisibleChanged="@(v => showFacets = v)"
+                                ActiveFilterCount="@GetActiveFilterCount()"
+                                OnClearFacets="ClearFilters">
+                <Facets>
+                    <FacetSection Title="Periodo">
+                        <FacetDatePeriod StartDate="startDate"
+                                         StartDateChanged="v => startDate = v"
+                                         EndDate="endDate"
+                                         EndDateChanged="v => endDate = v"
+                                         Preset="datePreset"
+                                         PresetChanged="v => datePreset = v"
+                                         Counts="periodCounts"
+                                         OnChanged="OnPeriodChanged" />
+                    </FacetSection>
+                    <FacetSection Title="Estado req.">
+                        <FacetCheckboxList Options="requirementStatusOptions"
+                                           SelectedIds="requirementStatusIds"
+                                           SelectedIdsChanged="OnRequirementStatusChange" />
+                    </FacetSection>
+                    <FacetSection Title="Estado tarea">
+                        <FacetCheckboxList Options="taskStatusOptions"
+                                           SelectedIds="taskStatusIds"
+                                           SelectedIdsChanged="OnTaskStatusChange" />
+                    </FacetSection>
+                    @if (!isDeveloperRole)
+                    {
+                        <FacetSection Title="Responsable">
+                            <FacetCheckboxList Options="responsibleOptions"
+                                               SelectedIds="responsibleIds"
+                                               SelectedIdsChanged="OnResponsibleChange" />
+                        </FacetSection>
+                    }
+                </Facets>
+                <FacetFooter>
+                    <p class="@Tw.FacetHint">Planificación</p>
+                    <p class="text-xs leading-snug text-gray-600">
+                        Inicio @detail.Project.StartDate.ToString("dd/MM/yyyy")
+                        · Fin @(detail.Project.EndDate?.ToString("dd/MM/yyyy") ?? "—")
+                        · Real @(detail.Project.ActualEndDate?.ToString("dd/MM/yyyy") ?? "—")
+                    </p>
+                </FacetFooter>
+                <ChildContent>
+                    <div class="space-y-3">
+                        <ProjectDetailMetrics Detail="detail" ShowProgressCards="false" />
+
+                        @if (detail.Project.IsClosedStatus)
+                        {
+                            <div class="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                                <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                                    <div>
+                                        <h2 class="@Tw.CardTitle">Burndown de horas</h2>
+                                        <p class="mt-0.5 text-xs text-gray-500">
+                                            Horas restantes · estimado @burndownTotalHours.ToString("0.##", CultureInfo.InvariantCulture) h
+                                        </p>
+                                    </div>
+                                </div>
+                                <BurndownChart Data="burndownData" ContainerClass="h-[28rem] w-full" />
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center">
+                                <h2 class="@Tw.CardTitle">Burndown de horas</h2>
+                                <p class="mt-1 text-xs text-gray-500">
+                                    Disponible cuando el proyecto esté finalizado (cerrado). Mientras esté abierto no aplica el estimado de horas del burndown.
+                                </p>
+                            </div>
+                        }
+
+                        <ProjectDetailMetrics Detail="detail"
+                                              PeriodLabel="@($"{startDate:dd-MM-yyyy} — {endDate:dd-MM-yyyy}")"
+                                              ShowHoursCards="false" />
+                    </div>
+                </ChildContent>
+            </FilteredPageLayout>
+        }
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public long ProjectId { get; set; }
+
+    private Context context = new();
+    private ProjectDetailReadResponse? detail;
+    private ProjectBurndownResponse? burndownData;
+    private decimal burndownTotalHours;
+    private bool loading = true;
+    private bool showFacets = false;
+    private bool isDeveloperRole;
+    private string? errorMessage;
+
+    private DateTime startDate = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime endDate = DateTime.Today;
+    private DatePeriodPreset datePreset = DatePeriodHelper.DefaultPreset;
+    private IReadOnlyDictionary<DatePeriodPreset, int> periodCounts = new Dictionary<DatePeriodPreset, int>();
+    private ProjectDetailReadResponse? periodCountDetail;
+    private HashSet<long> taskStatusIds = new();
+    private HashSet<long> requirementStatusIds = new();
+    private HashSet<long> responsibleIds = new();
+
+    private List<RequirementStatus> requirementStatuses = new();
+    private List<GestionProyectos.Data.Entities.TaskManagement.TaskStatus> taskStatuses = new();
+    private List<User> users = new();
+    private ProjectDetailReadResponse? facetSourceDetail;
+    private List<FacetOption> requirementStatusOptions = new();
+    private List<FacetOption> taskStatusOptions = new();
+    private List<FacetOption> responsibleOptions = new();
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        isDeveloperRole = context.Role?.Equals("Desarrollador", StringComparison.OrdinalIgnoreCase) == true;
+        requirementStatuses = catalogEngine.GetRequirementStatuses().Data ?? new();
+        taskStatuses = catalogEngine.GetTaskStatuses().Data ?? new();
+        users = catalogEngine.GetUsers().Data ?? new();
+        await LoadAsync();
+    }
+
+    protected override async System.Threading.Tasks.Task OnParametersSetAsync()
+    {
+        if (!loading && detail?.Project.Id != ProjectId)
+            await LoadAsync();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private System.Threading.Tasks.Task RefreshAsync() => LoadAsync();
+
+    private async System.Threading.Tasks.Task LoadAsync()
+    {
+        loading = true;
+        errorMessage = null;
+        burndownData = null;
+        burndownTotalHours = 0;
+
+        var response = projectDetailReadEngine.Execute(new ProjectDetailReadRequest
+        {
+            ProjectId = ProjectId,
+            StartDate = startDate,
+            EndDate = endDate,
+            TaskStatusId = FacetFilter.ToApiSingleId(taskStatusIds),
+            RequirementStatusId = FacetFilter.ToApiSingleId(requirementStatusIds),
+            ResponsibleUserId = FacetFilter.ToApiSingleId(responsibleIds),
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            loading = false;
+            errorMessage = response.Message?.Description ?? "No se pudo cargar el análisis.";
+            detail = null;
+            return;
+        }
+
+        detail = response.Data;
+        ApplyDetailFacetFilters();
+        if (detail == null)
+        {
+            loading = false;
+            errorMessage = "No se encontró el detalle del proyecto.";
+            return;
+        }
+
+        if (detail.Project.IsClosedStatus)
+        {
+            var burndownResponse = projectBurndownEngine.GetBurndown(ProjectId);
+            if (!burndownResponse.Success)
+            {
+                loading = false;
+                errorMessage = burndownResponse.Message?.Description ?? "No se pudo cargar el burndown.";
+                return;
+            }
+
+            burndownData = burndownResponse.Data;
+            burndownTotalHours = burndownData?.TotalEstimatedHours ?? 0;
+        }
+
+        loading = false;
+        await LoadFacetSourceAsync();
+        await LoadPeriodCountSourceAsync();
+        RefreshFacetOptions();
+    }
+
+    private async System.Threading.Tasks.Task LoadFacetSourceAsync()
+    {
+        var response = projectDetailReadEngine.Execute(new ProjectDetailReadRequest
+        {
+            ProjectId = ProjectId,
+            StartDate = startDate,
+            EndDate = endDate,
+            Context = context
+        });
+        facetSourceDetail = response.Success ? response.Data : null;
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private async System.Threading.Tasks.Task LoadPeriodCountSourceAsync()
+    {
+        var (rangeStart, rangeEnd) = DatePeriodHelper.GetRange(DatePeriodPreset.LastYear);
+        var response = projectDetailReadEngine.Execute(new ProjectDetailReadRequest
+        {
+            ProjectId = ProjectId,
+            StartDate = rangeStart,
+            EndDate = rangeEnd,
+            Context = context
+        });
+        periodCountDetail = response.Success ? response.Data : null;
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private IEnumerable<(ProjectDetailTaskItem Task, long RequirementStatusId)> FlattenPeriodCountTasks()
+    {
+        if (periodCountDetail == null)
+            yield break;
+
+        foreach (var requirement in periodCountDetail.Requirements)
+        {
+            foreach (var task in requirement.Tasks)
+                yield return (task, requirement.RequirementStatusId);
+        }
+    }
+
+    private IEnumerable<(ProjectDetailTaskItem Task, long RequirementStatusId)> FlattenTasksWithRequirementStatus()
+    {
+        if (facetSourceDetail == null)
+            yield break;
+
+        foreach (var requirement in facetSourceDetail.Requirements)
+        {
+            foreach (var task in requirement.Tasks)
+                yield return (task, requirement.RequirementStatusId);
+        }
+    }
+
+    private void RefreshFacetOptions()
+    {
+        if (facetSourceDetail == null)
+        {
+            requirementStatusOptions = new();
+            taskStatusOptions = new();
+            responsibleOptions = new();
+            periodCounts = new Dictionary<DatePeriodPreset, int>();
+            return;
+        }
+
+        var requirementCatalog = requirementStatuses.Select(s => (s.Id, s.Description));
+        requirementStatusOptions = requirementCatalog.ToFacetOptions(
+            facetSourceDetail.Requirements,
+            r => r.RequirementStatusId,
+            MatchesRequirementFacet(requirementStatusId: 0),
+            requirementStatusIds);
+
+        var taskCatalog = taskStatuses.Select(s => (s.Id, s.Description));
+        taskStatusOptions = taskCatalog.ToFacetOptions(
+            FlattenTasksWithRequirementStatus(),
+            x => x.Task.TaskStatusId,
+            MatchesTaskFacetEntry(taskStatusId: 0),
+            taskStatusIds);
+
+        var userCatalog = users.Select(u => (u.Id, $"{u.Name} {u.LastName}".Trim()));
+        responsibleOptions = userCatalog.ToFacetOptions(
+            FlattenTasksWithRequirementStatus(),
+            x => x.Task.UserId,
+            MatchesTaskFacetEntry(responsibleId: 0),
+            responsibleIds);
+
+        var periodTasks = FlattenPeriodCountTasks().Where(MatchesTaskFacetEntry()).ToList();
+        periodCounts = DatePeriodHelper.CountByPresets(
+            (rangeStart, rangeEnd) => periodTasks.Count(x =>
+                x.Task.LastExecutionDate.HasValue
+                && DatePeriodHelper.IsDateInRange(x.Task.LastExecutionDate.Value, rangeStart, rangeEnd)),
+            startDate,
+            endDate);
+    }
+
+    private Func<ProjectDetailRequirementItem, bool> MatchesRequirementFacet(long requirementStatusId = -1)
+    {
+        return requirement =>
+        {
+            if (requirementStatusId != 0
+                && !FacetFilter.Matches(requirement.RequirementStatusId, requirementStatusIds, requirementStatuses.Count))
+                return false;
+
+            if (FacetFilter.IsActive(taskStatusIds, taskStatuses.Count)
+                && !requirement.Tasks.Any(t => taskStatusIds.Contains(t.TaskStatusId)))
+                return false;
+
+            if (!isDeveloperRole
+                && FacetFilter.IsActive(responsibleIds, users.Count)
+                && !requirement.Tasks.Any(t => responsibleIds.Contains(t.UserId)))
+                return false;
+
+            return true;
+        };
+    }
+
+    private Func<(ProjectDetailTaskItem Task, long RequirementStatusId), bool> MatchesTaskFacetEntry(
+        long taskStatusId = -1,
+        long responsibleId = -1)
+    {
+        return entry =>
+            (taskStatusId == 0 || FacetFilter.Matches(entry.Task.TaskStatusId, taskStatusIds, taskStatuses.Count))
+            && (responsibleId == 0 || FacetFilter.Matches(entry.Task.UserId, responsibleIds, users.Count))
+            && FacetFilter.Matches(entry.RequirementStatusId, requirementStatusIds, requirementStatuses.Count);
+    }
+
+    private void ApplyDetailFacetFilters()
+    {
+        if (detail == null)
+            return;
+
+        if (!FacetFilter.IsActive(requirementStatusIds, requirementStatuses.Count)
+            && !FacetFilter.IsActive(taskStatusIds, taskStatuses.Count)
+            && (isDeveloperRole || !FacetFilter.IsActive(responsibleIds, users.Count)))
+            return;
+
+        detail.Requirements = detail.Requirements
+            .Where(r => FacetFilter.Matches(r.RequirementStatusId, requirementStatusIds, requirementStatuses.Count))
+            .Select(r =>
+            {
+                r.Tasks = r.Tasks
+                    .Where(t => FacetFilter.Matches(t.TaskStatusId, taskStatusIds, taskStatuses.Count)
+                                && (isDeveloperRole || FacetFilter.Matches(t.UserId, responsibleIds, users.Count)))
+                    .ToList();
+                return r;
+            })
+            .Where(r => r.Tasks.Count > 0
+                        || (!FacetFilter.IsActive(taskStatusIds, taskStatuses.Count)
+                            && (isDeveloperRole || !FacetFilter.IsActive(responsibleIds, users.Count))))
+            .ToList();
+    }
+
+    private void GoToDetail() => NavigationManager.NavigateTo(AppRoutes.ProjectDetail(ProjectId));
+
+    private string GetPageSubtitle() =>
+        detail == null
+            ? string.Empty
+            : $"#{detail.Project.Id} · {detail.Project.Customer} · {detail.Project.Status}";
+
+    private void OnPeriodChanged() => _ = LoadAsync();
+
+    private void OnRequirementStatusChange(IReadOnlySet<long> ids)
+    {
+        requirementStatusIds = new HashSet<long>(ids);
+        RefreshFacetOptions();
+        _ = LoadAsync();
+    }
+
+    private void OnTaskStatusChange(IReadOnlySet<long> ids)
+    {
+        taskStatusIds = new HashSet<long>(ids);
+        RefreshFacetOptions();
+        _ = LoadAsync();
+    }
+
+    private void OnResponsibleChange(IReadOnlySet<long> ids)
+    {
+        responsibleIds = new HashSet<long>(ids);
+        RefreshFacetOptions();
+        _ = LoadAsync();
+    }
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (DatePeriodHelper.IsFilterActive(datePreset, startDate, endDate)) count++;
+        if (FacetFilter.IsActive(requirementStatusIds, requirementStatuses.Count)) count++;
+        if (FacetFilter.IsActive(taskStatusIds, taskStatuses.Count)) count++;
+        if (!isDeveloperRole && FacetFilter.IsActive(responsibleIds, users.Count)) count++;
+        return count;
+    }
+
+    private async System.Threading.Tasks.Task ClearFilters()
+    {
+        datePreset = DatePeriodHelper.DefaultPreset;
+        DatePeriodHelper.ApplyPreset(datePreset, out startDate, out endDate);
+        requirementStatusIds = new HashSet<long>();
+        taskStatusIds = new HashSet<long>();
+        responsibleIds = new HashSet<long>();
+        await LoadAsync();
+    }
+
+    public async ValueTask DisposeAsync() =>
+        await JSRuntime.InvokeVoidAsync("disposeBurndownChart");
+}

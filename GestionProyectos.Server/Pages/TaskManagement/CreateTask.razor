@@ -1,0 +1,477 @@
+@page "/create-task/{TaskId:long}"
+@inject ICatalogEngine catalogEngine
+@inject ITaskDetailReadEngine taskDetailReadEngine
+@inject ITaskCreationEngine taskCreationEngine
+@inject ITaskUpdateEngine taskUpdateEngine
+@inject ISessionStorageService session
+@inject NavigationManager NavigationManager
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.Security
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Catalog.Request
+@using GestionProyectos.Engine.Feature.Task.Detail
+@using GestionProyectos.Engine.Feature.Task.Detail.Request
+@using GestionProyectos.Engine.Feature.Task.TaskCreation
+@using GestionProyectos.Engine.Feature.Task.TaskCreation.Request
+@using GestionProyectos.Engine.Feature.Task.TaskUpdate
+@using GestionProyectos.Engine.Feature.Task.TaskUpdate.Request
+@using GestionProyectos.Engine.Feature.Task
+@using GestionProyectos.Engine.Feature
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using GestionProyectos.Shared.Enums
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        @if (!allowed)
+        {
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                @(update ? "Solo los administradores pueden editar tareas." : "No tiene permiso para crear tareas.")
+            </div>
+        }
+        else
+        {
+        @if (!string.IsNullOrWhiteSpace(loadError))
+        {
+            <div class="mb-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">@loadError</div>
+        }
+        <h1 class="@Tw.PageTitle mb-2">@(update ? "Editar Tarea" : "Nueva Tarea")</h1>
+
+        <div class="@Tw.FormCard">
+            @if (!string.IsNullOrWhiteSpace(formError))
+            {
+                <div class="rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">@formError</div>
+            }
+            <div class="@Tw.FormGridSm">
+                <div>
+                    <label class="@Tw.FormLabel">Empresa</label>
+                    <select class="@Tw.FormSelect" value="@enterpriseId" @onchange="OnEnterpriseChange">
+                        <option value="0">-- Seleccione --</option>
+                        @foreach (var item in enterprises)
+                        {
+                            <option value="@item.Id">@item.Description</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label class="@Tw.FormLabel">Cliente</label>
+                    <select class="@Tw.FormSelect" value="@customerId" @onchange="OnCustomerChange" disabled="@(enterpriseId == 0)">
+                        <option value="0">-- Seleccione --</option>
+                        @foreach (var item in customers)
+                        {
+                            <option value="@item.Id">@item.Description</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label class="@Tw.FormLabel">Proyecto</label>
+                    <select class="@Tw.FormSelect" value="@projectId" @onchange="OnProjectChange" disabled="@(customerId == 0)">
+                        <option value="0">-- Seleccione --</option>
+                        @foreach (var item in projects)
+                        {
+                            <option value="@item.Id">@item.Description</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label class="@Tw.FormLabel">Requerimiento</label>
+                    <select class="@FieldClass(ticketError)" @bind="ticketId" disabled="@(projectId == 0)">
+                        <option value="0">-- Seleccione --</option>
+                        @foreach (var ticket in GetSelectableTickets())
+                        {
+                            <option value="@ticket.Id">@ticket.Id - @ticket.Description</option>
+                        }
+                    </select>
+                    <FormFieldError Message="@ticketError" />
+                </div>
+            </div>
+
+            <div>
+                <label class="@Tw.FormLabel">Descripción</label>
+                <textarea class="@FieldClass(descriptionError)" @bind="description"></textarea>
+                <FormFieldError Message="@descriptionError" />
+            </div>
+
+            <div class="@Tw.FormGridSm">
+                <div>
+                    <label class="@Tw.FormLabel">Horas estimadas</label>
+                    <input type="number" step="0.5" min="0.5" class="@FieldClass(hoursError)" @bind="estimatedHours" />
+                    <FormFieldError Message="@hoursError" />
+                </div>
+                <div>
+                    <label class="@Tw.FormLabel">Fase de desarrollo</label>
+                    <select class="@Tw.FormSelect" @bind="developmentPhaseId">
+                        @foreach (var phase in developmentPhases)
+                        {
+                            <option value="@phase.Id">@phase.Description</option>
+                        }
+                    </select>
+                </div>
+            </div>
+
+            <div class="@Tw.FormGridSm">
+                <div>
+                    <label class="@Tw.FormLabel">Alcance original</label>
+                    <select class="@Tw.FormSelect" value="@isWithinScopeSelection" @onchange="OnIsWithinScopeChange">
+                        <option value="true">Sí</option>
+                        <option value="false">No</option>
+                    </select>
+                </div>
+                @if (isWithinScopeSelection == "false")
+                {
+                    <div>
+                        <label class="@Tw.FormLabel">Motivo cambio de alcance</label>
+                        <select class="@FieldClass(scopeReasonError)" @bind="scopeChangeReasonValue">
+                            <option value="0">-- Selecciona --</option>
+                            <option value="@((short)TaskScopeChangeReason.Internal)">Omisión interna</option>
+                            <option value="@((short)TaskScopeChangeReason.External)">Cambio externo</option>
+                        </select>
+                        <FormFieldError Message="@scopeReasonError" />
+                    </div>
+                }
+            </div>
+
+            <div>
+                <label class="@Tw.FormLabel">Asignación</label>
+                <select class="@FieldClass(assignedUserError)" @bind="assignedUserId">
+                    <option value="0">-- Sin asignar --</option>
+                    @foreach (var user in developers)
+                    {
+                        <option value="@user.Id">@GetUserDisplayName(user)</option>
+                    }
+                </select>
+                <FormFieldError Message="@assignedUserError" />
+            </div>
+
+            @if (update)
+            {
+                <div>
+                    <label class="@Tw.FormLabel">Estado</label>
+                    <select class="@Tw.FormSelect" value="@taskStatusId" @onchange="OnTaskStatusChanged">
+                        @foreach (var status in GetSelectableTaskStatuses())
+                        {
+                            <option value="@status.Id">@status.Description</option>
+                        }
+                    </select>
+                </div>
+                @if (taskStatusId != initialTaskStatusId && RequiresBlockReason(taskStatusId))
+                {
+                    <div>
+                        <label class="@Tw.FormLabel">Motivo del bloqueo</label>
+                        <textarea class="@FieldClass(blockReasonError)" @bind="statusChangeReason" placeholder="Describa el motivo del bloqueo"></textarea>
+                        <FormFieldError Message="@blockReasonError" />
+                    </div>
+                }
+            }
+
+            <div class="flex gap-2 pt-1">
+                @if (update && perms.CanEdit)
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="UpdateTask">Actualizar</button>
+                }
+                else if (!update && perms.CanCreate)
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="SaveTask">Guardar</button>
+                }
+                <button type="button" class="@Tw.BtnOutline" @onclick="Cancel">Cancelar</button>
+            </div>
+        </div>
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public long TaskId { get; set; }
+
+    private List<Requirement> tickets = new();
+    private HashSet<long> closedRequirementStatusIds = new();
+    private List<Enterprise> enterprises = new();
+    private List<Customer> allCustomers = new();
+    private List<Project> allProjects = new();
+    private List<Customer> customers = new();
+    private List<Project> projects = new();
+    private List<User> developers = new();
+    private List<TaskDevelopmentPhase> developmentPhases = new();
+    private List<GestionProyectos.Data.Entities.TaskManagement.TaskStatus> taskStatuses = new();
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private bool update;
+    private bool allowed;
+
+    private long ticketId;
+    private long enterpriseId;
+    private long customerId;
+    private long projectId;
+    private long developmentPhaseId;
+    private long taskStatusId;
+    private long initialTaskStatusId;
+    private long assignedUserId;
+    private string description = string.Empty;
+    private decimal estimatedHours;
+    private string isWithinScopeSelection = "true";
+    private short scopeChangeReasonValue;
+    private string statusChangeReason = string.Empty;
+
+    private string? formError;
+    private string? loadError;
+    private string? ticketError;
+    private string? descriptionError;
+    private string? hoursError;
+    private string? scopeReasonError;
+    private string? assignedUserError;
+    private string? blockReasonError;
+
+    private static string FieldClass(string? error) =>
+        string.IsNullOrWhiteSpace(error) ? Tw.FormInput : Tw.FormInputError;
+
+    private IEnumerable<Requirement> GetSelectableTickets()
+    {
+        foreach (var ticket in tickets)
+        {
+            if (closedRequirementStatusIds.Contains(ticket.RequirementStatusId) && ticket.Id != ticketId)
+                continue;
+
+            yield return ticket;
+        }
+    }
+
+    private IEnumerable<GestionProyectos.Data.Entities.TaskManagement.TaskStatus> GetSelectableTaskStatuses()
+    {
+        foreach (var status in taskStatuses)
+        {
+            if (!perms.CanFinalize &&
+                FinalizeStatusHelper.IsTaskFinalized(status.Description) &&
+                status.Id != taskStatusId)
+                continue;
+
+            yield return status;
+        }
+    }
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/task-management");
+        developmentPhases = catalogEngine.GetTaskDevelopmentPhases().Data ?? new();
+        taskStatuses = catalogEngine.GetTaskStatuses().Data ?? new();
+        closedRequirementStatusIds = (catalogEngine.GetRequirementStatuses().Data ?? new())
+            .Where(s => s.IsClosed)
+            .Select(s => s.Id)
+            .ToHashSet();
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        allCustomers = catalogEngine.GetCustomers().Data ?? new();
+        allProjects = catalogEngine.GetProjects().Data ?? new();
+        developers = (catalogEngine.GetUsers().Data ?? new List<User>())
+            .OrderBy(u => GetUserDisplayName(u))
+            .ToList();
+
+        if (developmentPhases.Count > 0)
+            developmentPhaseId = developmentPhases[0].Id;
+
+        if (context.UserId > 0)
+            assignedUserId = context.UserId;
+
+        update = TaskId > 0;
+        allowed = perms.CanView && (update ? perms.CanEdit : perms.CanCreate);
+        if (update && allowed)
+            await LoadTask();
+    }
+
+    private async System.Threading.Tasks.Task LoadTask()
+    {
+        var response = taskDetailReadEngine.Execute(new TaskDetailReadRequest
+        {
+            TaskId = TaskId,
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            loadError = response.Message.Description;
+            return;
+        }
+
+        var task = response.Data?.Task;
+        if (task == null)
+        {
+            loadError = "Tarea no encontrada.";
+            return;
+        }
+        ticketId = task.RequirementId;
+        SetupHierarchyFromProject(task.ProjectId);
+        description = task.Description;
+        estimatedHours = task.TimeEstimationHours;
+        developmentPhaseId = task.DevelopmentPhaseId;
+        taskStatusId = task.TaskStatusId;
+        initialTaskStatusId = task.TaskStatusId;
+        assignedUserId = task.UserId;
+        isWithinScopeSelection = task.IsWithinOriginalScope ? "true" : "false";
+        scopeChangeReasonValue = task.ScopeChangeReason ?? 0;
+        statusChangeReason = string.Empty;
+    }
+
+    private void OnEnterpriseChange(ChangeEventArgs e)
+    {
+        enterpriseId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        customerId = projectId = ticketId = 0;
+        RefreshCustomers();
+        projects = new();
+        tickets = new();
+    }
+
+    private void OnCustomerChange(ChangeEventArgs e)
+    {
+        customerId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        projectId = ticketId = 0;
+        RefreshProjects();
+        tickets = new();
+    }
+
+    private void OnProjectChange(ChangeEventArgs e)
+    {
+        projectId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        ticketId = 0;
+        RefreshTickets();
+    }
+
+    private void RefreshCustomers() =>
+        customers = enterpriseId > 0
+            ? allCustomers.Where(c => c.EnterpriseId == enterpriseId).ToList()
+            : new();
+
+    private void RefreshProjects() =>
+        projects = customerId > 0
+            ? allProjects.Where(p => p.CustomerId == customerId).ToList()
+            : new();
+
+    private void RefreshTickets() =>
+        tickets = projectId > 0
+            ? (catalogEngine.GetTickets(new GetTicketRequest { ProjectId = projectId }).Data ?? new())
+                .OrderByDescending(t => t.Id)
+                .ToList()
+            : new();
+
+    private void SetupHierarchyFromProject(long selectedProjectId)
+    {
+        if (selectedProjectId <= 0) return;
+
+        projectId = selectedProjectId;
+        var project = allProjects.FirstOrDefault(p => p.Id == selectedProjectId);
+        if (project == null) return;
+
+        customerId = project.CustomerId;
+        enterpriseId = allCustomers.FirstOrDefault(c => c.Id == customerId)?.EnterpriseId ?? 0;
+        RefreshCustomers();
+        RefreshProjects();
+        RefreshTickets();
+    }
+
+    private void OnIsWithinScopeChange(ChangeEventArgs e)
+    {
+        isWithinScopeSelection = e.Value?.ToString() ?? "true";
+        if (isWithinScopeSelection == "true")
+            scopeChangeReasonValue = 0;
+    }
+
+    private void OnTaskStatusChanged(ChangeEventArgs e)
+    {
+        if (!long.TryParse(e.Value?.ToString(), out var statusId))
+            return;
+
+        taskStatusId = statusId;
+        blockReasonError = null;
+        if (!RequiresBlockReason(taskStatusId))
+            statusChangeReason = string.Empty;
+    }
+
+    private bool RequiresBlockReason(long statusId)
+    {
+        var status = taskStatuses.FirstOrDefault(s => s.Id == statusId);
+        return TaskStatusHelper.RequiresBlockReason(status?.Description);
+    }
+
+    private bool ValidateForm()
+    {
+        formError = ticketError = descriptionError = hoursError = scopeReasonError = assignedUserError = blockReasonError = null;
+        var valid = true;
+
+        if (ticketId == 0) { ticketError = "Seleccione un requerimiento."; valid = false; }
+        if (string.IsNullOrWhiteSpace(description)) { descriptionError = "La descripción es obligatoria."; valid = false; }
+        if (estimatedHours <= 0) { hoursError = "Las horas estimadas deben ser mayores a cero."; valid = false; }
+        if (assignedUserId > 0 && developers.All(u => u.Id != assignedUserId))
+        {
+            assignedUserError = "Seleccione un desarrollador válido.";
+            valid = false;
+        }
+        if (isWithinScopeSelection == "false" && scopeChangeReasonValue == 0)
+        {
+            scopeReasonError = "Indique el motivo del cambio de alcance.";
+            valid = false;
+        }
+        if (update &&
+            taskStatusId != initialTaskStatusId &&
+            RequiresBlockReason(taskStatusId) &&
+            string.IsNullOrWhiteSpace(statusChangeReason))
+        {
+            blockReasonError = "Indique el motivo del bloqueo.";
+            valid = false;
+        }
+
+        return valid;
+    }
+
+    private void SaveTask()
+    {
+        if (!ValidateForm()) return;
+
+        var response = taskCreationEngine.Execute(new TaskCreationRequest
+        {
+            TicketId = ticketId,
+            Description = description,
+            TimeEstimationHours = estimatedHours,
+            IsWithinOriginalScope = isWithinScopeSelection == "true",
+            ScopeChangeReason = isWithinScopeSelection == "true" ? null : scopeChangeReasonValue,
+            DevelopmentPhaseId = developmentPhaseId,
+            UserId = assignedUserId,
+            Context = context
+        });
+
+        if (!response.Success) { formError = response.Message.Description; return; }
+        NavigationManager.NavigateTo("/task-management");
+    }
+
+    private void UpdateTask()
+    {
+        if (!ValidateForm()) return;
+
+        var response = taskUpdateEngine.Execute(new TaskUpdateRequest
+        {
+            Id = TaskId,
+            TicketId = ticketId,
+            Description = description,
+            TimeEstimationHours = estimatedHours,
+            TaskStatusId = taskStatusId,
+            IsWithinOriginalScope = isWithinScopeSelection == "true",
+            ScopeChangeReason = isWithinScopeSelection == "true" ? null : scopeChangeReasonValue,
+            StatusChangeReason = taskStatusId != initialTaskStatusId && RequiresBlockReason(taskStatusId)
+                ? statusChangeReason.Trim()
+                : null,
+            DevelopmentPhaseId = developmentPhaseId,
+            UserId = assignedUserId,
+            Context = context
+        });
+
+        if (!response.Success) { formError = response.Message.Description; return; }
+        NavigationManager.NavigateTo("/task-management");
+    }
+
+    private static string GetUserDisplayName(User user) =>
+        $"{user.Name} {user.LastName}".Trim();
+
+    private void Cancel() => NavigationManager.NavigateTo("/task-management");
+}

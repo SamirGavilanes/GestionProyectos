@@ -1,0 +1,48 @@
+<FacetSection Title="Empresa">
+    <FacetCheckboxList Options="EnterpriseOptions"
+                       MultiSelect="false"
+                       SelectedId="EnterpriseId"
+                       SelectedIdChanged="OnEnterpriseChanged" />
+</FacetSection>
+<FacetSection Title="Cliente">
+    <FacetCheckboxList Options="CustomerOptions"
+                       MultiSelect="false"
+                       SelectedId="CustomerId"
+                       SelectedIdChanged="OnCustomerChanged" />
+</FacetSection>
+<FacetSection Title="Proyecto">
+    <FacetCheckboxList Options="ProjectOptions"
+                       MultiSelect="false"
+                       SelectedId="ProjectId"
+                       SelectedIdChanged="OnProjectChanged" />
+</FacetSection>
+@if (ShowRequirements)
+{
+    <FacetSection Title="Requerimiento">
+        <FacetCheckboxList Options="RequirementOptions"
+                           MultiSelect="false"
+                           SelectedId="RequirementId"
+                           SelectedIdChanged="OnRequirementChanged" />
+    </FacetSection>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<FacetOption> EnterpriseOptions { get; set; } = Array.Empty<FacetOption>();
+    [Parameter] public IReadOnlyList<FacetOption> CustomerOptions { get; set; } = Array.Empty<FacetOption>();
+    [Parameter] public IReadOnlyList<FacetOption> ProjectOptions { get; set; } = Array.Empty<FacetOption>();
+    [Parameter] public IReadOnlyList<FacetOption> RequirementOptions { get; set; } = Array.Empty<FacetOption>();
+    [Parameter] public long EnterpriseId { get; set; }
+    [Parameter] public long CustomerId { get; set; }
+    [Parameter] public long ProjectId { get; set; }
+    [Parameter] public long RequirementId { get; set; }
+    [Parameter] public bool ShowRequirements { get; set; } = true;
+    [Parameter] public EventCallback<long> EnterpriseIdChanged { get; set; }
+    [Parameter] public EventCallback<long> CustomerIdChanged { get; set; }
+    [Parameter] public EventCallback<long> ProjectIdChanged { get; set; }
+    [Parameter] public EventCallback<long> RequirementIdChanged { get; set; }
+
+    private System.Threading.Tasks.Task OnEnterpriseChanged(long id) => EnterpriseIdChanged.InvokeAsync(id);
+    private System.Threading.Tasks.Task OnCustomerChanged(long id) => CustomerIdChanged.InvokeAsync(id);
+    private System.Threading.Tasks.Task OnProjectChanged(long id) => ProjectIdChanged.InvokeAsync(id);
+    private System.Threading.Tasks.Task OnRequirementChanged(long id) => RequirementIdChanged.InvokeAsync(id);
+}

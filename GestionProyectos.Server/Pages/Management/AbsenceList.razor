@@ -1,0 +1,469 @@
+@page "/absence-list"
+@page "/user-timeoff-list"
+@inject IJSRuntime JSRuntime
+@inject IUserManagementEngine userManagementEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.Security
+@using GestionProyectos.Engine.Security.Users
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using GestionProyectos.Shared.Enums
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/absence-list">
+            <PageHeader Title="Ausentismos" Subtitle="Vacaciones y permisos del personal — impactan el análisis de desempeño."
+                        ShowFacetsToggle="true"
+                        FacetsVisible="showFacets"
+                        FacetsVisibleChanged="@(v => showFacets = v)"
+                        ActiveFilterCount="@GetActiveFilterCount()">
+                <Actions>
+                    @if (perms.CanCreate)
+                    {
+                        <button type="button" class="@Tw.BtnPrimary" @onclick="StartCreate" disabled="@creating">
+                            <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                        </button>
+                    }
+                    <TableSearchBox Value="@searchInput" ValueChanged="@(v => searchInput = v)" Compact="true" />
+                    <TableRefreshButton OnClick="Load" />
+                </Actions>
+            </PageHeader>
+
+            <FilteredPageLayout FacetsVisible="showFacets"
+                                FacetsVisibleChanged="@(v => showFacets = v)"
+                                ActiveFilterCount="@GetActiveFilterCount()"
+                                OnClearFacets="ClearFilters">
+                <Facets>
+                    <FacetSection Title="Miembro de equipo">
+                        <FacetCheckboxList Options="userOptions"
+                                           SelectedIds="userIds"
+                                           SelectedIdsChanged="OnUserFilterChange" />
+                    </FacetSection>
+                    <FacetSection Title="Tipo">
+                        <FacetCheckboxList Options="typeOptions"
+                                           SelectedIds="typeIds"
+                                           SelectedIdsChanged="OnTypeFilterChange" />
+                    </FacetSection>
+                    <FacetSection Title="Periodo">
+                        <FacetDatePeriod StartDate="filterStart"
+                                         StartDateChanged="v => filterStart = v"
+                                         EndDate="filterEnd"
+                                         EndDateChanged="v => filterEnd = v"
+                                         Preset="datePreset"
+                                         PresetChanged="v => datePreset = v"
+                                         Counts="periodCounts"
+                                         OnChanged="OnPeriodChanged" />
+                    </FacetSection>
+                </Facets>
+                <ChildContent>
+            <div class="@Tw.TableWrapContained">
+                <table class="@Tw.Table">
+                    <colgroup>
+                        <col class="w-14" />
+                        <col class="w-44" />
+                        <col class="w-28" />
+                        <col class="w-24" />
+                        <col class="w-24" />
+                        <col class="w-16" />
+                        <col class="w-20" />
+                        <col />
+                        <col class="w-28" />
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <SortableTh Column="Id" State="tableState" OnSorted="ApplyView">Id</SortableTh>
+                            <SortableTh Column="User" State="tableState" OnSorted="ApplyView">Miembro de equipo</SortableTh>
+                            <SortableTh Column="Type" State="tableState" OnSorted="ApplyView">Tipo</SortableTh>
+                            <SortableTh Column="StartDate" State="tableState" OnSorted="ApplyView">Desde</SortableTh>
+                            <SortableTh Column="EndDate" State="tableState" OnSorted="ApplyView">Hasta</SortableTh>
+                            <SortableTh Column="Days" State="tableState" OnSorted="ApplyView">Días</SortableTh>
+                            <SortableTh Column="Hours" State="tableState" OnSorted="ApplyView">Horas</SortableTh>
+                            <SortableTh Column="Description" State="tableState" OnSorted="ApplyView">Observaciones</SortableTh>
+                            <th class="@Tw.ThActionsAuto"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (creating && perms.CanCreate)
+                        {
+                            <tr>
+                                <td class="@Tw.Td text-gray-400">Nuevo</td>
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" @bind="newUserId">
+                                        <option value="0">-- Selecciona --</option>
+                                        @foreach (var u in users) { <option value="@u.Id">@GetUserLabel(u)</option> }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" @bind="newType">
+                                        <option value="@((short)UserTimeOffType.Vacation)">Vacaciones</option>
+                                        <option value="@((short)UserTimeOffType.Permission)">Permiso</option>
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdEdit"><input type="date" class="@Tw.TableDate" @bind="newStartDate" /></td>
+                                <td class="@Tw.TdEdit"><input type="date" class="@Tw.TableDate" @bind="newEndDate" /></td>
+                                <td class="@Tw.Td text-center tabular-nums">@GetDayCount(newStartDate, newEndDate)</td>
+                                <td class="@Tw.TdEdit"><input type="number" class="@Tw.TableInput" step="0.5" min="0" @bind="newHours" /></td>
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newDescription" placeholder="Motivo u observación" /></td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="Create">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        @if (displayItems.Count == 0 && !creating)
+                        {
+                            <tr><td colspan="9" class="@Tw.Td text-center text-gray-400">No hay registros</td></tr>
+                        }
+                        @foreach (var item in displayItems)
+                        {
+                            <tr class="hover:bg-gray-50">
+                                <td class="@Tw.Td w-14">@item.Id</td>
+                                @if (editingId == item.Id && perms.CanEdit)
+                                {
+                                    <td class="@Tw.TdEdit">
+                                        <select class="@Tw.TableSelect" @bind="editUserId">
+                                            <option value="0">-- Selecciona --</option>
+                                            @foreach (var u in users) { <option value="@u.Id">@GetUserLabel(u)</option> }
+                                        </select>
+                                    </td>
+                                    <td class="@Tw.TdEdit">
+                                        <select class="@Tw.TableSelect" @bind="editType">
+                                            <option value="@((short)UserTimeOffType.Vacation)">Vacaciones</option>
+                                            <option value="@((short)UserTimeOffType.Permission)">Permiso</option>
+                                        </select>
+                                    </td>
+                                    <td class="@Tw.TdEdit"><input type="date" class="@Tw.TableDate" @bind="editStartDate" /></td>
+                                    <td class="@Tw.TdEdit"><input type="date" class="@Tw.TableDate" @bind="editEndDate" /></td>
+                                    <td class="@Tw.Td text-center tabular-nums">@GetDayCount(editStartDate, editEndDate)</td>
+                                    <td class="@Tw.TdEdit"><input type="number" class="@Tw.TableInput" step="0.5" min="0" @bind="editHours" /></td>
+                                    <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="editDescription" /></td>
+                                    <td class="@Tw.TdActionsAuto">
+                                        <div class="@Tw.TableActions">
+                                            <button type="button" class="@Tw.TableBtn" @onclick="() => Update(item.Id)">Guardar</button>
+                                            <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                        </div>
+                                    </td>
+                                }
+                                else
+                                {
+                                    <td class="@Tw.TdText" title="@GetUserLabel(item.UserId)">@GetUserLabel(item.UserId)</td>
+                                    <td class="@Tw.Td">
+                                        <span class="@GetTypeBadgeClass(item.Type)">@GetTypeLabel(item.Type)</span>
+                                    </td>
+                                    <td class="@Tw.Td whitespace-nowrap">@item.StartDate.ToString("dd-MM-yyyy")</td>
+                                    <td class="@Tw.Td whitespace-nowrap">@item.EndDate.ToString("dd-MM-yyyy")</td>
+                                    <td class="@Tw.Td text-center tabular-nums">@GetDayCount(item.StartDate, item.EndDate)</td>
+                                    <td class="@Tw.Td text-center tabular-nums">@item.Hours.ToString("0.##")</td>
+                                    <td class="@Tw.TdText" title="@item.Description">@(string.IsNullOrWhiteSpace(item.Description) ? "—" : item.Description)</td>
+                                    <td class="@Tw.TdActionsAuto">
+                                        @if (perms.CanEdit || perms.CanDelete)
+                                        {
+                                            <TableRowActionsMenu>
+                                                @if (perms.CanEdit)
+                                                {
+                                                    <TableRowAction Label="Editar" OnClick="@(() => StartEdit(item))" />
+                                                }
+                                                @if (perms.CanDelete)
+                                                {
+                                                    <TableRowAction Label="Eliminar" Danger OnClick="@(() => Delete(item.Id))" />
+                                                }
+                                            </TableRowActionsMenu>
+                                        }
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyView" />
+                </ChildContent>
+            </FilteredPageLayout>
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private List<User> users = new();
+    private List<UserTimeOff> allItems = new();
+    private List<UserTimeOff> displayItems = new();
+    private readonly PagedTableState tableState = new();
+    private string? searchText;
+
+    private bool creating;
+    private bool showFacets = false;
+    private long editingId;
+    private HashSet<long> userIds = new();
+    private HashSet<long> typeIds = new();
+    private DateTime filterStart;
+    private DateTime filterEnd;
+    private DatePeriodPreset datePreset = DatePeriodHelper.DefaultPreset;
+    private IReadOnlyDictionary<DatePeriodPreset, int> periodCounts = new Dictionary<DatePeriodPreset, int>();
+
+    private List<FacetOption> userOptions = new();
+    private List<FacetOption> typeOptions = new();
+
+    private static readonly List<(long Id, string Label)> TypeCatalog = new()
+    {
+        ((long)UserTimeOffType.Vacation, "Vacaciones"),
+        ((long)UserTimeOffType.Permission, "Permiso")
+    };
+
+    private long newUserId;
+    private short newType = (short)UserTimeOffType.Vacation;
+    private DateTime newStartDate = DateTime.Today;
+    private DateTime newEndDate = DateTime.Today;
+    private decimal newHours;
+    private string newDescription = string.Empty;
+
+    private long editUserId;
+    private short editType = (short)UserTimeOffType.Vacation;
+    private DateTime editStartDate = DateTime.Today;
+    private DateTime editEndDate = DateTime.Today;
+    private decimal editHours;
+    private string editDescription = string.Empty;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/absence-list");
+        users = userManagementEngine.GetUsers().Data ?? new();
+        DatePeriodHelper.ApplyPreset(datePreset, out filterStart, out filterEnd);
+        Load();
+    }
+
+    private void Load()
+    {
+        var response = userManagementEngine.GetTimeOffs();
+        if (!response.Success)
+        {
+            JSRuntime.InvokeVoidAsync("alert", response.Message?.Description ?? "No se pudieron cargar los ausentismos.");
+            allItems = new();
+        }
+        else
+        {
+            allItems = response.Data ?? new();
+        }
+
+        RefreshFacetOptions();
+        tableState.ResetPage();
+        ApplyView();
+    }
+
+    private void RefreshFacetOptions()
+    {
+        var userCatalog = users.Select(u => (u.Id, GetUserLabel(u)));
+        userOptions = userCatalog.ToFacetOptions(
+            allItems,
+            x => x.UserId,
+            MatchesAbsence(userId: 0),
+            userIds);
+
+        typeOptions = TypeCatalog.ToFacetOptions(
+            allItems,
+            x => (long)x.Type,
+            MatchesAbsence(typeId: 0),
+            typeIds);
+
+        periodCounts = DatePeriodHelper.CountByPresets(
+            (rangeStart, rangeEnd) => allItems.Count(item =>
+                MatchesAbsence()(item)
+                && DatePeriodHelper.RangesOverlap(item.StartDate, item.EndDate, rangeStart, rangeEnd)),
+            filterStart,
+            filterEnd);
+    }
+
+    private Func<UserTimeOff, bool> MatchesAbsence(long userId = -1, long typeId = -1)
+    {
+        return item =>
+            (userId == 0 || FacetFilter.Matches(item.UserId, userIds, users.Count))
+            && (typeId == 0 || FacetFilter.Matches((long)item.Type, typeIds, TypeCatalog.Count));
+    }
+
+    private void ApplyView()
+    {
+        IEnumerable<UserTimeOff> query = allItems;
+
+        if (FacetFilter.IsActive(userIds, users.Count))
+            query = query.Where(x => userIds.Contains(x.UserId));
+
+        if (FacetFilter.IsActive(typeIds, TypeCatalog.Count))
+            query = query.Where(x => typeIds.Contains((long)x.Type));
+
+        query = query.Where(x => x.EndDate.Date >= filterStart.Date);
+        query = query.Where(x => x.StartDate.Date <= filterEnd.Date);
+
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText.ToLower();
+            query = query.Where(x => TableSearch.Matches(s,
+                x.Id.ToString(),
+                GetUserLabel(x.UserId),
+                GetTypeLabel(x.Type),
+                x.Description,
+                x.StartDate.ToString("dd-MM-yyyy"),
+                x.EndDate.ToString("dd-MM-yyyy")));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "User" => tableState.SortAscending ? query.OrderBy(x => GetUserLabel(x.UserId)) : query.OrderByDescending(x => GetUserLabel(x.UserId)),
+            "Type" => tableState.SortAscending ? query.OrderBy(x => x.Type) : query.OrderByDescending(x => x.Type),
+            "StartDate" => tableState.SortAscending ? query.OrderBy(x => x.StartDate) : query.OrderByDescending(x => x.StartDate),
+            "EndDate" => tableState.SortAscending ? query.OrderBy(x => x.EndDate) : query.OrderByDescending(x => x.EndDate),
+            "Days" => tableState.SortAscending ? query.OrderBy(x => GetDayCount(x.StartDate, x.EndDate)) : query.OrderByDescending(x => GetDayCount(x.StartDate, x.EndDate)),
+            "Hours" => tableState.SortAscending ? query.OrderBy(x => x.Hours) : query.OrderByDescending(x => x.Hours),
+            "Description" => tableState.SortAscending ? query.OrderBy(x => x.Description) : query.OrderByDescending(x => x.Description),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        var list = query.ToList();
+        tableState.SetPageCount(list.Count);
+        displayItems = tableState.Paginate(list).ToList();
+    }
+
+    private void StartCreate()
+    {
+        if (!perms.CanCreate) return;
+        Cancel();
+        creating = true;
+        newStartDate = newEndDate = DateTime.Today;
+        newHours = 0;
+        newType = (short)UserTimeOffType.Vacation;
+    }
+
+    private void StartEdit(UserTimeOff item)
+    {
+        if (!perms.CanEdit) return;
+        Cancel();
+        editingId = item.Id;
+        editUserId = item.UserId;
+        editType = item.Type;
+        editStartDate = item.StartDate;
+        editEndDate = item.EndDate;
+        editHours = item.Hours;
+        editDescription = item.Description;
+    }
+
+    private void Cancel()
+    {
+        creating = false;
+        editingId = 0;
+        newUserId = editUserId = 0;
+        newDescription = editDescription = string.Empty;
+        newType = editType = (short)UserTimeOffType.Vacation;
+        newStartDate = editStartDate = DateTime.Today;
+        newEndDate = editEndDate = DateTime.Today;
+        newHours = editHours = 0;
+    }
+
+    private void Create()
+    {
+        var response = userManagementEngine.SaveTimeOff(0, newUserId, newType, newStartDate, newEndDate, newHours, newDescription, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel();
+        Load();
+    }
+
+    private void Update(long id)
+    {
+        var response = userManagementEngine.SaveTimeOff(id, editUserId, editType, editStartDate, editEndDate, editHours, editDescription, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel();
+        Load();
+    }
+
+    private void Delete(long id)
+    {
+        if (!perms.CanDelete) return;
+        var response = userManagementEngine.DeleteTimeOff(id, context);
+        if (!response.Success) JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+        Load();
+    }
+
+    private void OnUserFilterChange(IReadOnlySet<long> ids)
+    {
+        userIds = new HashSet<long>(ids);
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    private void OnTypeFilterChange(IReadOnlySet<long> ids)
+    {
+        typeIds = new HashSet<long>(ids);
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    private void OnPeriodChanged()
+    {
+        tableState.ResetPage();
+        ApplyView();
+    }
+
+    private string GetUserLabel(long userId) =>
+        users.FirstOrDefault(u => u.Id == userId) is { } u ? $"{u.Name} {u.LastName}".Trim() : $"#{userId}";
+
+    private static string GetUserLabel(User user) => $"{user.Name} {user.LastName}".Trim();
+
+    private static int GetDayCount(DateTime start, DateTime end) =>
+        end.Date < start.Date ? 0 : (end.Date - start.Date).Days + 1;
+
+    private static string GetTypeLabel(short type) => type switch
+    {
+        (short)UserTimeOffType.Vacation => "Vacaciones",
+        (short)UserTimeOffType.Permission => "Permiso",
+        _ => "Otro"
+    };
+
+    private static string GetTypeBadgeClass(short type) =>
+        StatusBadgeHelper.TableBadgeBase + "font-semibold " + type switch
+        {
+            (short)UserTimeOffType.Vacation => "bg-blue-100 text-blue-800",
+            (short)UserTimeOffType.Permission => "bg-amber-100 text-amber-800",
+            _ => "bg-gray-100 text-gray-800"
+        };
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (FacetFilter.IsActive(userIds, users.Count)) count++;
+        if (FacetFilter.IsActive(typeIds, TypeCatalog.Count)) count++;
+        if (DatePeriodHelper.IsFilterActive(datePreset, filterStart, filterEnd)) count++;
+        return count;
+    }
+
+    private void ClearFilters()
+    {
+        userIds = new HashSet<long>();
+        typeIds = new HashSet<long>();
+        datePreset = DatePeriodHelper.DefaultPreset;
+        DatePeriodHelper.ApplyPreset(datePreset, out filterStart, out filterEnd);
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+}

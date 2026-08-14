@@ -1,0 +1,98 @@
+@inject ISessionStorageService Session
+@inject ISecurityEngine SecurityEngine
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Engine.Security
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@implements IDisposable
+
+@if (!loaded)
+{
+    <p class="text-xs text-gray-400">Cargando...</p>
+}
+else if (!canView)
+{
+    <div class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+        No tiene permiso para ver esta página.
+    </div>
+}
+else
+{
+    @ChildContent
+}
+
+@code {
+    [Parameter] public string? PageRoute { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool loaded;
+    private bool canView = true;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        Navigation.LocationChanged += OnLocationChanged;
+        await EvaluatePermissionAsync();
+    }
+
+    protected override async System.Threading.Tasks.Task OnParametersSetAsync()
+    {
+        if (loaded)
+            return;
+
+        await EvaluatePermissionAsync();
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        if (!string.IsNullOrWhiteSpace(PageRoute))
+            return;
+
+        _ = InvokeAsync(EvaluatePermissionAsync);
+    }
+
+    private async System.Threading.Tasks.Task EvaluatePermissionAsync()
+    {
+        try
+        {
+            var context = await Session!.GetStorage<Context>("session");
+            if (context == null || context.UserId <= 0)
+            {
+                canView = false;
+                return;
+            }
+
+            if (context.Menus == null || context.Menus.Count == 0)
+                context = await Session.RefreshMenusAsync(SecurityEngine);
+
+            var route = PageRoute;
+
+            if (string.IsNullOrWhiteSpace(route))
+            {
+                var relative = Navigation.ToBaseRelativePath(Navigation.Uri).TrimStart('/');
+                route = string.IsNullOrWhiteSpace(relative) ? "index" : relative;
+            }
+
+            canView = PermissionHelper.CanView(context, route);
+        }
+        catch
+        {
+            canView = false;
+        }
+        finally
+        {
+            loaded = true;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (loaded && canView)
+            await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    public void Dispose() => Navigation.LocationChanged -= OnLocationChanged;
+}

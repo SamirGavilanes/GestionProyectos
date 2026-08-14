@@ -1,0 +1,592 @@
+﻿@page "/project-detail/{ProjectId:long}"
+@inject IJSRuntime JSRuntime
+@inject IProjectDetailReadEngine projectDetailReadEngine
+@inject ICatalogEngine catalogEngine
+@inject ISessionStorageService session
+@inject NavigationManager NavigationManager
+
+@using System.Globalization
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.Security
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature.Project.Detail
+@using GestionProyectos.Engine.Feature.Project.Detail.Request
+@using GestionProyectos.Engine.Feature.Project.Detail.Response
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/project-list">
+        @if (loading)
+        {
+            <p class="text-xs text-gray-500">Cargando proyecto...</p>
+        }
+        else if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">@errorMessage</div>
+        }
+        else if (detail != null)
+        {
+            <PageHeader Title="@detail.Project.Description"
+                        Subtitle="@GetPageSubtitle()"
+                        ShowFacetsToggle="true"
+                        FacetsVisible="showFacets"
+                        FacetsVisibleChanged="@(v => showFacets = v)"
+                        ActiveFilterCount="@GetActiveFilterCount()">
+                <Actions>
+                    <ListPageToolbar OnRefresh="RefreshDetail" Refreshing="@loading">
+                        <LeadingContent>
+                            <button type="button" class="@Tw.BtnOutline" @onclick="GoBack">
+                                <LucideIcon Name="arrow-left" CssClass="h-4 w-4" /> Volver
+                            </button>
+                            <button type="button" class="@Tw.BtnOutline" @onclick="GoToAnalysis">
+                                <LucideIcon Name="line-chart" CssClass="h-4 w-4" /> Análisis
+                            </button>
+                        </LeadingContent>
+                    </ListPageToolbar>
+                </Actions>
+            </PageHeader>
+
+            <FilteredPageLayout FacetsVisible="showFacets"
+                                FacetsVisibleChanged="@(v => showFacets = v)"
+                                ActiveFilterCount="@GetActiveFilterCount()"
+                                OnClearFacets="ClearFilters">
+                <Facets>
+                    <FacetSection Title="Periodo">
+                        <FacetDatePeriod StartDate="startDate"
+                                         StartDateChanged="v => startDate = v"
+                                         EndDate="endDate"
+                                         EndDateChanged="v => endDate = v"
+                                         Preset="datePreset"
+                                         PresetChanged="v => datePreset = v"
+                                         Counts="periodCounts"
+                                         OnChanged="OnPeriodChanged" />
+                    </FacetSection>
+                    <FacetSection Title="Estado req.">
+                        <FacetCheckboxList Options="requirementStatusOptions"
+                                           SelectedIds="requirementStatusIds"
+                                           SelectedIdsChanged="OnRequirementStatusChange" />
+                    </FacetSection>
+                    <FacetSection Title="Estado tarea">
+                        <FacetCheckboxList Options="taskStatusOptions"
+                                           SelectedIds="taskStatusIds"
+                                           SelectedIdsChanged="OnTaskStatusChange" />
+                    </FacetSection>
+                    @if (!isDeveloperRole)
+                    {
+                        <FacetSection Title="Responsable">
+                            <FacetCheckboxList Options="responsibleOptions"
+                                               SelectedIds="responsibleIds"
+                                               SelectedIdsChanged="OnResponsibleChange" />
+                        </FacetSection>
+                    }
+                </Facets>
+                <FacetFooter>
+                    <p class="@Tw.FacetHint">Planificación</p>
+                    <p class="text-xs leading-snug text-gray-600">
+                        Inicio @detail.Project.StartDate.ToString("dd/MM/yyyy")
+                        · Fin @(detail.Project.EndDate?.ToString("dd/MM/yyyy") ?? "—")
+                        · Real @(detail.Project.ActualEndDate?.ToString("dd/MM/yyyy") ?? "—")
+                    </p>
+                </FacetFooter>
+                <ChildContent>
+
+            <div class="rounded-lg border border-gray-200 bg-white p-2.5 shadow-sm">
+                <div class="mb-2 flex items-center justify-between gap-2">
+                    <h2 class="@Tw.CardTitle">Requerimientos y tareas</h2>
+                    <button type="button" class="@($"{Tw.BtnOutline} !py-1")" @onclick="ToggleAll">
+                        @(allExpanded ? "Contraer todo" : "Expandir todo")
+                    </button>
+                </div>
+
+                @if (detail.Requirements.Count == 0)
+                {
+                    <p class="text-xs text-gray-500">Este proyecto no tiene requerimientos con tareas visibles.</p>
+                }
+                else
+                {
+                    <div class="space-y-2">
+                        @foreach (var requirement in detail.Requirements)
+                        {
+                            var isExpanded = expandedRequirements.Contains(requirement.Id);
+                            <div class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+                                <button type="button"
+                                        class="@($"flex w-full items-center gap-2 border-l-4 px-2.5 py-2 text-left transition {GetRequirementHeaderClass(requirement.Status)}{(isExpanded ? " bg-gray-50" : " bg-white hover:bg-gray-50/80")}")"
+                                        @onclick="() => ToggleRequirement(requirement.Id)">
+                                    <LucideIcon Name="@(isExpanded ? "chevron-down" : "chevron-right")" CssClass="h-3.5 w-3.5 shrink-0 text-gray-500" />
+                                    <div class="min-w-0 flex-1">
+                                        <div class="flex flex-wrap items-center gap-1.5">
+                                            <p class="text-xs font-semibold text-gray-900">
+                                                <span class="mr-1 font-bold text-primary-700">#@requirement.Id</span>
+                                                @requirement.Description
+                                            </p>
+                                            <span class="@GetRequirementStatusBadgeClass(requirement.Status)">@requirement.Status</span>
+                                        </div>
+                                        <p class="mt-0.5 text-xs text-gray-500">@requirement.Tasks.Count tarea(s)</p>
+                                    </div>
+                                    <div class="hidden shrink-0 rounded border border-gray-200 bg-white px-2 py-1 text-right text-xs sm:block">
+                                        <p class="text-gray-400">Planificado</p>
+                                        <p class="font-semibold tabular-nums text-gray-900">@FormatHours(requirement.EstimatedHours)</p>
+                                    </div>
+                                    <div class="hidden shrink-0 rounded border border-gray-200 bg-white px-2 py-1 text-right text-xs sm:block">
+                                        <p class="text-gray-400">Real (período)</p>
+                                        <p class="font-semibold tabular-nums text-gray-900">@FormatHours(requirement.LoggedHours)</p>
+                                    </div>
+                                    <div class="shrink-0 rounded border border-gray-200 bg-white px-2 py-1 text-right text-xs">
+                                        <p class="text-gray-400">Desfase</p>
+                                        <p class="font-semibold tabular-nums @GetVarianceClass(requirement.LoggedHours - requirement.EstimatedHours)">
+                                            @FormatVariance(requirement.LoggedHours - requirement.EstimatedHours)
+                                        </p>
+                                    </div>
+                                </button>
+
+                                @if (isExpanded)
+                                {
+                                    <div class="border-t border-gray-200 bg-slate-50/50">
+                                        @if (requirement.Tasks.Count == 0)
+                                        {
+                                            <p class="px-3 py-2 pl-8 text-xs text-gray-500">Sin tareas asignadas.</p>
+                                        }
+                                        else
+                                        {
+                                            <div class="mb-0.5 hidden gap-2 border-b border-gray-100 bg-white/80 px-3 py-1 pl-8 text-xs font-semibold uppercase tracking-wide text-gray-400 md:grid md:grid-cols-[minmax(0,1fr)_6.5rem_7rem_4.5rem_4.5rem_4.5rem_6.5rem]">
+                                                <span>Tarea</span>
+                                                <span>Estado</span>
+                                                <span>Responsable</span>
+                                                <span class="text-right">Estimadas</span>
+                                                <span class="text-right">Reales</span>
+                                                <span class="text-right">Desfase</span>
+                                                <span class="text-right">Últ. horas</span>
+                                            </div>
+                                            <div class="divide-y divide-gray-100">
+                                                @foreach (var task in requirement.Tasks)
+                                                {
+                                                    <div class="flex flex-col gap-0.5 px-3 py-1 pl-8 text-xs leading-tight odd:bg-white even:bg-slate-50/40 hover:bg-primary-50/30 md:grid md:grid-cols-[minmax(0,1fr)_6.5rem_7rem_4.5rem_4.5rem_4.5rem_6.5rem] md:items-center">
+                                                        <div class="min-w-0">
+                                                            <p class="truncate text-gray-700">
+                                                                <span class="text-gray-400">#@task.Id</span>
+                                                                @task.Description
+                                                            </p>
+                                                        </div>
+                                                        <span class="@GetTaskStatusBadgeClass(task.Status)">@task.Status</span>
+                                                        <span class="truncate text-gray-600" title="@task.Responsible">@task.Responsible</span>
+                                                        <span class="text-right tabular-nums text-gray-800 md:block">@FormatHours(task.EstimatedHours)</span>
+                                                        <span class="text-right tabular-nums text-gray-800 md:block">@FormatHours(task.LoggedHours)</span>
+                                                        <span class="text-right font-medium tabular-nums @GetVarianceClass(task.LoggedHours - task.EstimatedHours) md:block">
+                                                            @FormatVariance(task.LoggedHours - task.EstimatedHours)
+                                                        </span>
+                                                        <span class="text-right tabular-nums text-gray-500 md:block" title="@FormatLastHoursTitle(task.LastHoursUpdateAt)">
+                                                            @FormatLastHoursUpdate(task.LastHoursUpdateAt)
+                                                        </span>
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+                </ChildContent>
+            </FilteredPageLayout>
+        }
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public long ProjectId { get; set; }
+
+    private Context context = new();
+    private ProjectDetailReadResponse? detail;
+    private readonly HashSet<long> expandedRequirements = new();
+    private bool allExpanded;
+    private bool loading = true;
+    private bool showFacets = false;
+    private bool isDeveloperRole;
+    private string? errorMessage;
+
+    private DateTime startDate = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime endDate = DateTime.Today;
+    private DatePeriodPreset datePreset = DatePeriodHelper.DefaultPreset;
+    private IReadOnlyDictionary<DatePeriodPreset, int> periodCounts = new Dictionary<DatePeriodPreset, int>();
+    private ProjectDetailReadResponse? periodCountDetail;
+    private HashSet<long> taskStatusIds = new();
+    private HashSet<long> requirementStatusIds = new();
+    private HashSet<long> responsibleIds = new();
+
+    private List<RequirementStatus> requirementStatuses = new();
+    private List<GestionProyectos.Data.Entities.TaskManagement.TaskStatus> taskStatuses = new();
+    private List<User> users = new();
+    private ProjectDetailReadResponse? facetSourceDetail;
+    private List<FacetOption> requirementStatusOptions = new();
+    private List<FacetOption> taskStatusOptions = new();
+    private List<FacetOption> responsibleOptions = new();
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        isDeveloperRole = context.Role?.Equals("Desarrollador", StringComparison.OrdinalIgnoreCase) == true;
+        requirementStatuses = catalogEngine.GetRequirementStatuses().Data ?? new();
+        taskStatuses = catalogEngine.GetTaskStatuses().Data ?? new();
+        users = catalogEngine.GetUsers().Data ?? new();
+        await LoadDetail();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    protected override async System.Threading.Tasks.Task OnParametersSetAsync()
+    {
+        if (!loading && detail?.Project.Id != ProjectId)
+            await LoadDetail(resetExpansion: true);
+    }
+
+    private System.Threading.Tasks.Task RefreshDetail() => LoadDetail();
+
+    private async System.Threading.Tasks.Task LoadDetail(bool resetExpansion = true)
+    {
+        loading = true;
+        errorMessage = null;
+        if (resetExpansion)
+        {
+            expandedRequirements.Clear();
+            allExpanded = false;
+        }
+
+        var response = projectDetailReadEngine.Execute(new ProjectDetailReadRequest
+        {
+            ProjectId = ProjectId,
+            StartDate = startDate,
+            EndDate = endDate,
+            TaskStatusId = FacetFilter.ToApiSingleId(taskStatusIds),
+            RequirementStatusId = FacetFilter.ToApiSingleId(requirementStatusIds),
+            ResponsibleUserId = FacetFilter.ToApiSingleId(responsibleIds),
+            Context = context
+        });
+
+        loading = false;
+
+        if (!response.Success)
+        {
+            errorMessage = response.Message.Description;
+            detail = null;
+            return;
+        }
+
+        detail = response.Data;
+        ApplyDetailFacetFilters();
+        if (detail == null)
+        {
+            errorMessage = "No se encontró el detalle del proyecto.";
+            return;
+        }
+        if (resetExpansion && detail.Requirements.Count > 0)
+            expandedRequirements.Add(detail.Requirements[0].Id);
+
+        await LoadFacetSourceAsync();
+        await LoadPeriodCountSourceAsync();
+        RefreshFacetOptions();
+    }
+
+    private async System.Threading.Tasks.Task LoadFacetSourceAsync()
+    {
+        var response = projectDetailReadEngine.Execute(new ProjectDetailReadRequest
+        {
+            ProjectId = ProjectId,
+            StartDate = startDate,
+            EndDate = endDate,
+            Context = context
+        });
+        facetSourceDetail = response.Success ? response.Data : null;
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private async System.Threading.Tasks.Task LoadPeriodCountSourceAsync()
+    {
+        var (rangeStart, rangeEnd) = DatePeriodHelper.GetRange(DatePeriodPreset.LastYear);
+        var response = projectDetailReadEngine.Execute(new ProjectDetailReadRequest
+        {
+            ProjectId = ProjectId,
+            StartDate = rangeStart,
+            EndDate = rangeEnd,
+            Context = context
+        });
+        periodCountDetail = response.Success ? response.Data : null;
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private IEnumerable<(ProjectDetailTaskItem Task, long RequirementStatusId)> FlattenPeriodCountTasks()
+    {
+        if (periodCountDetail == null)
+            yield break;
+
+        foreach (var requirement in periodCountDetail.Requirements)
+        {
+            foreach (var task in requirement.Tasks)
+                yield return (task, requirement.RequirementStatusId);
+        }
+    }
+
+    private IEnumerable<(ProjectDetailTaskItem Task, long RequirementStatusId)> FlattenTasksWithRequirementStatus()
+    {
+        if (facetSourceDetail == null)
+            yield break;
+
+        foreach (var requirement in facetSourceDetail.Requirements)
+        {
+            foreach (var task in requirement.Tasks)
+                yield return (task, requirement.RequirementStatusId);
+        }
+    }
+
+    private void RefreshFacetOptions()
+    {
+        if (facetSourceDetail == null)
+        {
+            requirementStatusOptions = new();
+            taskStatusOptions = new();
+            responsibleOptions = new();
+            periodCounts = new Dictionary<DatePeriodPreset, int>();
+            return;
+        }
+
+        var requirementCatalog = requirementStatuses.Select(s => (s.Id, s.Description));
+        requirementStatusOptions = requirementCatalog.ToFacetOptions(
+            facetSourceDetail.Requirements,
+            r => r.RequirementStatusId,
+            MatchesRequirementFacet(requirementStatusId: 0),
+            requirementStatusIds);
+
+        var taskCatalog = taskStatuses.Select(s => (s.Id, s.Description));
+        taskStatusOptions = taskCatalog.ToFacetOptions(
+            FlattenTasksWithRequirementStatus(),
+            x => x.Task.TaskStatusId,
+            MatchesTaskFacetEntry(taskStatusId: 0),
+            taskStatusIds);
+
+        var userCatalog = users.Select(u => (u.Id, $"{u.Name} {u.LastName}".Trim()));
+        responsibleOptions = userCatalog.ToFacetOptions(
+            FlattenTasksWithRequirementStatus(),
+            x => x.Task.UserId,
+            MatchesTaskFacetEntry(responsibleId: 0),
+            responsibleIds);
+
+        var periodTasks = FlattenPeriodCountTasks().Where(MatchesTaskFacetEntry()).ToList();
+        periodCounts = DatePeriodHelper.CountByPresets(
+            (rangeStart, rangeEnd) => periodTasks.Count(x =>
+                x.Task.LastExecutionDate.HasValue
+                && DatePeriodHelper.IsDateInRange(x.Task.LastExecutionDate.Value, rangeStart, rangeEnd)),
+            startDate,
+            endDate);
+    }
+
+    private Func<ProjectDetailRequirementItem, bool> MatchesRequirementFacet(long requirementStatusId = -1)
+    {
+        return requirement =>
+        {
+            if (requirementStatusId != 0
+                && !FacetFilter.Matches(requirement.RequirementStatusId, requirementStatusIds, requirementStatuses.Count))
+                return false;
+
+            if (FacetFilter.IsActive(taskStatusIds, taskStatuses.Count)
+                && !requirement.Tasks.Any(t => taskStatusIds.Contains(t.TaskStatusId)))
+                return false;
+
+            if (!isDeveloperRole
+                && FacetFilter.IsActive(responsibleIds, users.Count)
+                && !requirement.Tasks.Any(t => responsibleIds.Contains(t.UserId)))
+                return false;
+
+            return true;
+        };
+    }
+
+    private Func<(ProjectDetailTaskItem Task, long RequirementStatusId), bool> MatchesTaskFacetEntry(
+        long taskStatusId = -1,
+        long responsibleId = -1)
+    {
+        return entry =>
+            (taskStatusId == 0 || FacetFilter.Matches(entry.Task.TaskStatusId, taskStatusIds, taskStatuses.Count))
+            && (responsibleId == 0 || FacetFilter.Matches(entry.Task.UserId, responsibleIds, users.Count))
+            && FacetFilter.Matches(entry.RequirementStatusId, requirementStatusIds, requirementStatuses.Count);
+    }
+
+    private void ApplyDetailFacetFilters()
+    {
+        if (detail == null)
+            return;
+
+        if (!FacetFilter.IsActive(requirementStatusIds, requirementStatuses.Count)
+            && !FacetFilter.IsActive(taskStatusIds, taskStatuses.Count)
+            && (isDeveloperRole || !FacetFilter.IsActive(responsibleIds, users.Count)))
+            return;
+
+        detail.Requirements = detail.Requirements
+            .Where(r => FacetFilter.Matches(r.RequirementStatusId, requirementStatusIds, requirementStatuses.Count))
+            .Select(r =>
+            {
+                r.Tasks = r.Tasks
+                    .Where(t => FacetFilter.Matches(t.TaskStatusId, taskStatusIds, taskStatuses.Count)
+                                && (isDeveloperRole || FacetFilter.Matches(t.UserId, responsibleIds, users.Count)))
+                    .ToList();
+                return r;
+            })
+            .Where(r => r.Tasks.Count > 0
+                        || (!FacetFilter.IsActive(taskStatusIds, taskStatuses.Count)
+                            && (isDeveloperRole || !FacetFilter.IsActive(responsibleIds, users.Count))))
+            .ToList();
+    }
+
+    private void ToggleRequirement(long id)
+    {
+        if (expandedRequirements.Contains(id))
+            expandedRequirements.Remove(id);
+        else
+            expandedRequirements.Add(id);
+        allExpanded = detail != null && detail.Requirements.All(r => expandedRequirements.Contains(r.Id));
+    }
+
+    private void ToggleAll()
+    {
+        if (detail == null) return;
+
+        if (allExpanded)
+        {
+            expandedRequirements.Clear();
+            allExpanded = false;
+        }
+        else
+        {
+            foreach (var requirement in detail.Requirements)
+                expandedRequirements.Add(requirement.Id);
+            allExpanded = true;
+        }
+    }
+
+    private void GoBack() => NavigationManager.NavigateTo("/project-list");
+
+    private void GoToAnalysis() => NavigationManager.NavigateTo(AppRoutes.ProjectAnalysis(ProjectId));
+
+    private string GetPageSubtitle() =>
+        detail == null
+            ? string.Empty
+            : $"#{detail.Project.Id} · {detail.Project.Customer} · {detail.Project.Status}";
+
+    private void OnPeriodChanged() => _ = LoadDetail(resetExpansion: false);
+
+    private void OnRequirementStatusChange(IReadOnlySet<long> ids)
+    {
+        requirementStatusIds = new HashSet<long>(ids);
+        RefreshFacetOptions();
+        _ = LoadDetail(resetExpansion: false);
+    }
+
+    private void OnTaskStatusChange(IReadOnlySet<long> ids)
+    {
+        taskStatusIds = new HashSet<long>(ids);
+        RefreshFacetOptions();
+        _ = LoadDetail(resetExpansion: false);
+    }
+
+    private void OnResponsibleChange(IReadOnlySet<long> ids)
+    {
+        responsibleIds = new HashSet<long>(ids);
+        RefreshFacetOptions();
+        _ = LoadDetail(resetExpansion: false);
+    }
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (DatePeriodHelper.IsFilterActive(datePreset, startDate, endDate)) count++;
+        if (FacetFilter.IsActive(requirementStatusIds, requirementStatuses.Count)) count++;
+        if (FacetFilter.IsActive(taskStatusIds, taskStatuses.Count)) count++;
+        if (!isDeveloperRole && FacetFilter.IsActive(responsibleIds, users.Count)) count++;
+        return count;
+    }
+
+    private async System.Threading.Tasks.Task ClearFilters()
+    {
+        datePreset = DatePeriodHelper.DefaultPreset;
+        DatePeriodHelper.ApplyPreset(datePreset, out startDate, out endDate);
+        requirementStatusIds = new HashSet<long>();
+        taskStatusIds = new HashSet<long>();
+        responsibleIds = new HashSet<long>();
+        await LoadDetail(resetExpansion: false);
+    }
+
+    private static string FormatHours(decimal hours) =>
+        hours.ToString("0.##", CultureInfo.InvariantCulture) + " h";
+
+    private static string FormatVariance(decimal variance)
+    {
+        if (variance == 0) return "0 h";
+        var sign = variance > 0 ? "+" : "";
+        return sign + variance.ToString("0.##", CultureInfo.InvariantCulture) + " h";
+    }
+
+    private static string GetVarianceClass(decimal variance) => variance switch
+    {
+        > 0 => "text-red-600",
+        < 0 => "text-green-600",
+        _ => "text-gray-500"
+    };
+
+    private static string FormatLastHoursUpdate(DateTime? value) =>
+        value.HasValue ? value.Value.ToLocalTime().ToString("dd-MM-yyyy HH:mm", CultureInfo.InvariantCulture) : "—";
+
+    private static string FormatLastHoursTitle(DateTime? value) =>
+        value.HasValue ? $"Último registro de horas: {value.Value.ToLocalTime():dd-MM-yyyy HH:mm}" : "Sin registros de horas";
+
+    private static string GetTaskStatusBadgeClass(string status)
+    {
+        var baseClass = StatusBadgeHelper.TableBadgeBase + "font-semibold ";
+        var color = status.Trim().ToLowerInvariant() switch
+        {
+            var s when s.Contains("pendiente") => "bg-gray-100 text-gray-700",
+            var s when s.Contains("progreso") => "bg-blue-100 text-blue-800",
+            var s when s.Contains("finaliz") => "bg-green-100 text-green-800",
+            var s when s.Contains("interno") => "bg-amber-100 text-amber-800",
+            var s when s.Contains("externo") => "bg-orange-100 text-orange-800",
+            _ => "bg-gray-100 text-gray-600"
+        };
+        return baseClass + color;
+    }
+
+    private static string GetRequirementHeaderClass(string status)
+    {
+        var accent = status.Trim().ToLowerInvariant() switch
+        {
+            var s when s.Contains("pendiente") || s.Contains("nuevo") => "border-l-gray-400",
+            var s when s.Contains("progreso") || s.Contains("curso") => "border-l-blue-500",
+            var s when s.Contains("finaliz") || s.Contains("cerrad") => "border-l-emerald-500",
+            var s when s.Contains("bloque") => "border-l-amber-500",
+            _ => "border-l-primary-500"
+        };
+        return accent;
+    }
+
+    private static string GetRequirementStatusBadgeClass(string status)
+    {
+        var baseClass = StatusBadgeHelper.TableBadgeBase + "shrink-0 font-semibold ";
+        var color = status.Trim().ToLowerInvariant() switch
+        {
+            var s when s.Contains("pendiente") || s.Contains("nuevo") => "bg-gray-100 text-gray-700",
+            var s when s.Contains("progreso") || s.Contains("curso") => "bg-blue-100 text-blue-800",
+            var s when s.Contains("finaliz") || s.Contains("cerrad") => "bg-green-100 text-green-800",
+            var s when s.Contains("bloque") => "bg-amber-100 text-amber-800",
+            _ => "bg-primary-50 text-primary-800"
+        };
+        return baseClass + color;
+    }
+}

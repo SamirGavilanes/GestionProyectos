@@ -1,0 +1,595 @@
+﻿@page "/performance"
+@inject IJSRuntime JSRuntime
+@inject IPerformanceEngine performanceEngine
+@inject ICatalogEngine catalogEngine
+@inject ICustomerReadEngine customerReadEngine
+@inject IProjectReadEngine projectReadEngine
+@inject ITaskListEngine taskListEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Catalog.Request
+@using GestionProyectos.Engine.Feature.Customer.Read
+@using GestionProyectos.Engine.Feature.Customer.Read.Request
+@using GestionProyectos.Engine.Feature.Performance
+@using GestionProyectos.Engine.Feature.Performance.Request
+@using GestionProyectos.Engine.Feature.Performance.Response
+@using GestionProyectos.Engine.Feature.Project.Read
+@using GestionProyectos.Engine.Feature.Project.Read.Request
+@using GestionProyectos.Engine.Feature.Task.TaskList
+@using GestionProyectos.Engine.Feature.Task.TaskList.Request
+@using GestionProyectos.Engine.Feature.Task.TaskList.Response
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+
+@attribute [Authorize]
+@implements IAsyncDisposable
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/performance">
+            <PageHeader Title="Desempeño"
+                        Subtitle="Predictibilidad y calidad por tarea. Eje X: desviación % vs. estimación; Eje Y: bugs registrados."
+                        ShowFacetsToggle="true"
+                        FacetsVisible="showFacets"
+                        FacetsVisibleChanged="@(v => showFacets = v)"
+                        ActiveFilterCount="@GetActiveFilterCount()">
+                <Actions>
+                    <ListPageToolbar OnRefresh="LoadDataAsync" Refreshing="@isLoading" />
+                </Actions>
+            </PageHeader>
+
+            <FilteredPageLayout FacetsVisible="showFacets"
+                                FacetsVisibleChanged="@(v => showFacets = v)"
+                                ActiveFilterCount="@GetActiveFilterCount()"
+                                OnClearFacets="ClearFilters">
+                <Facets>
+                    <OrganizationFacetSections EnterpriseOptions="enterpriseOptions"
+                                               CustomerOptions="customerOptions"
+                                               ProjectOptions="projectOptions"
+                                               RequirementOptions="requirementOptions"
+                                               EnterpriseId="enterpriseValue"
+                                               CustomerId="customerValue"
+                                               ProjectId="projectValue"
+                                               RequirementId="requirementValue"
+                                               EnterpriseIdChanged="FilterEnterpriseChange"
+                                               CustomerIdChanged="FilterCustomerChange"
+                                               ProjectIdChanged="FilterProjectChange"
+                                               RequirementIdChanged="FilterRequirementChange" />
+                    <FacetSection Title="Periodo">
+                        <FacetDatePeriod StartDate="startDate"
+                                         StartDateChanged="v => startDate = v"
+                                         EndDate="endDate"
+                                         EndDateChanged="v => endDate = v"
+                                         Preset="datePreset"
+                                         PresetChanged="v => datePreset = v"
+                                         Counts="periodCounts"
+                                         OnChanged="OnPeriodChanged" />
+                    </FacetSection>
+                </Facets>
+                <ChildContent>
+            @if (!string.IsNullOrWhiteSpace(loadError))
+            {
+                <div class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">@loadError</div>
+            }
+
+            <div class="@Tw.Card">
+                @if (employees.Count > 0)
+                {
+                    <div class="mb-3 flex flex-wrap items-center justify-start gap-2">
+                        <button type="button" class="@Tw.BtnOutline !py-1 !px-2 text-xs" @onclick="ShowAllEmployees">Ver todo el equipo</button>
+                        <span class="text-xs text-gray-400">|</span>
+                        @foreach (var emp in employees)
+                        {
+                            var isVisible = visibleUserIds.Contains(emp.UserId);
+                            var isOnlyVisible = isVisible && visibleUserIds.Count == 1;
+                            <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-gray-200 px-2 py-1 text-xs hover:bg-gray-50 @(isOnlyVisible ? "opacity-80" : "")"
+                                   style="@(isVisible ? "" : "opacity: 0.45")">
+                                <input type="checkbox"
+                                       class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed"
+                                       checked="@isVisible"
+                                       disabled="@isOnlyVisible"
+                                       @onchange="e => ToggleEmployeeVisibility(emp.UserId, e)" />
+                                <span class="h-2.5 w-2.5 rounded-full ring-1 ring-gray-200" style="background-color: @emp.Color"></span>
+                                <span class="font-medium text-gray-700">@emp.UserName</span>
+                            </label>
+                        }
+                    </div>
+                }
+
+                @if (tasks.Count == 0)
+                {
+                    <div class="flex h-64 flex-col items-center justify-center text-center text-xs text-gray-500">
+                        <LucideIcon Name="chart-scatter" CssClass="mb-2 h-8 w-8 text-gray-300" />
+                        <p>No hay tareas con estimación y horas registradas en el período seleccionado.</p>
+                        <p class="mt-1 text-xs text-gray-400">Amplíe el rango de fechas o registre horas en las tareas.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="relative h-[32rem] w-full">
+                        <canvas @ref="chartCanvasRef"></canvas>
+                    </div>
+                }
+            </div>
+
+            @if (employees.Count > 0)
+            {
+                <div class="mt-3 rounded-lg border border-gray-200 bg-gray-50/80 px-3 py-2">
+                    <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Resumen por persona</p>
+                    <p class="mb-2 text-xs leading-snug text-gray-500">Error medio en horas: promedio de la diferencia entre lo estimado y lo registrado en cada tarea, ajustado por días de ausencia. Menor es mejor.</p>
+                    <div class="flex flex-wrap gap-2">
+                        @foreach (var emp in employees)
+                        {
+                            <div class="inline-flex min-w-0 items-center gap-2 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 shadow-sm">
+                                <span class="h-3 w-3 shrink-0 rounded-full ring-2 ring-white" style="background-color: @emp.Color"></span>
+                                <span class="truncate text-xs font-medium text-gray-900">@emp.UserName</span>
+                                <span class="text-xs text-gray-400">·</span>
+                                <span class="whitespace-nowrap text-xs text-gray-500">@emp.TaskCount tarea@(emp.TaskCount == 1 ? "" : "s")</span>
+                                <span class="text-xs text-gray-400">·</span>
+                                <span class="whitespace-nowrap text-xs text-gray-500">@emp.LoggedHours.ToString("0.##") h registradas</span>
+                                @if (emp.AbsentDays > 0)
+                                {
+                                    <span class="text-xs text-gray-400">·</span>
+                                    <span class="whitespace-nowrap text-xs font-medium text-amber-700">@emp.AbsentDays d. ausente@(emp.AbsentDays == 1 ? "" : "s")</span>
+                                }
+                                <span class="text-xs text-gray-400">·</span>
+                                <span class="whitespace-nowrap text-xs font-semibold tabular-nums"
+                                      style="color: @emp.Color"
+                                      title="Error medio absoluto: promedio en horas de |estimado − real| por tarea">
+                                    @emp.MeanAbsoluteErrorHours.ToString("0.##") h error medio
+                                </span>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+                </ChildContent>
+            </FilteredPageLayout>
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private ElementReference chartCanvasRef;
+    private DotNetObjectReference<Performance>? dotNetRef;
+    private bool pendingChartRender;
+    private bool chartRenderRetryScheduled;
+    private int chartRenderRetryCount;
+    private const int MaxChartRenderRetries = 30;
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+
+    private DateTime startDate = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime endDate = DateTime.Today;
+    private DatePeriodPreset datePreset = DatePeriodHelper.DefaultPreset;
+    private IReadOnlyDictionary<DatePeriodPreset, int> periodCounts = new Dictionary<DatePeriodPreset, int>();
+    private bool showFacets = false;
+    private bool isLoading;
+    private string? loadError;
+    private long enterpriseValue;
+    private long customerValue;
+    private long projectValue;
+    private long requirementValue;
+
+    private List<Enterprise> enterprises = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> allCustomers = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> customerList = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> projectList = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> allProjects = new();
+    private List<Requirement> requirementList = new();
+    private List<TaskItem> facetSourceTasks = new();
+    private List<FacetOption> enterpriseOptions = new();
+    private List<FacetOption> customerOptions = new();
+    private List<FacetOption> projectOptions = new();
+    private List<FacetOption> requirementOptions = new();
+    private Dictionary<long, long> customerEnterpriseMap = new();
+    private Dictionary<long, long> projectCustomerMap = new();
+
+    private List<PerformanceTaskPoint> tasks = new();
+    private List<PerformanceEmployeeSummary> employees = new();
+    private HashSet<long> visibleUserIds = new();
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        dotNetRef = DotNetObjectReference.Create(this);
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/performance");
+
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        allCustomers = customerReadEngine.GetCustomers().Data?.Customers?.ToList() ?? new();
+        customerList = allCustomers.ToList();
+        customerEnterpriseMap = allCustomers.ToDictionary(
+            c => c.Id,
+            c => enterprises.FirstOrDefault(e => string.Equals(e.Description, c.Enterprise, StringComparison.OrdinalIgnoreCase))?.Id ?? 0);
+        var projectsResponse = projectReadEngine.GetProjects(new ProjectReadRequest());
+        allProjects = projectsResponse.Success ? projectsResponse.Data?.Projects?.ToList() ?? new() : new();
+        projectCustomerMap = allProjects.ToDictionary(p => p.Id, p => p.CustomerId);
+
+        await LoadDataAsync();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await EnsureChartRenderedAsync();
+
+    [JSInvokable]
+    public async System.Threading.Tasks.Task OnChartVisibilityChanged(long[] userIds)
+    {
+        visibleUserIds = userIds.Length > 0
+            ? userIds.ToHashSet()
+            : employees.Select(e => e.UserId).ToHashSet();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        chartRenderRetryScheduled = false;
+        dotNetRef?.Dispose();
+        dotNetRef = null;
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("disposePerformanceChart");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private async System.Threading.Tasks.Task LoadDataAsync()
+    {
+        isLoading = true;
+        loadError = null;
+        try
+        {
+        var request = new PerformanceReadRequest
+        {
+            StartDate = startDate,
+            EndDate = endDate,
+            UseDateRange = true,
+            Context = context,
+            EnterpriseId = enterpriseValue,
+            CustomerId = customerValue,
+            ProjectId = projectValue,
+            RequirementId = requirementValue,
+            DeveloperId = 0
+        };
+
+        var response = performanceEngine.Execute(request);
+        if (!response.Success || response.Data == null)
+        {
+            loadError = string.IsNullOrWhiteSpace(response.Message?.Description)
+                ? "No se pudieron cargar los datos de desempeño."
+                : response.Message.Description;
+            tasks = new();
+            employees = new();
+            visibleUserIds = new();
+            await JSRuntime.InvokeVoidAsync("disposePerformanceChart");
+            StateHasChanged();
+            return;
+        }
+
+        tasks = response.Data.Tasks;
+        employees = response.Data.Employees;
+        visibleUserIds = employees.Select(e => e.UserId).ToHashSet();
+
+        await LoadFacetSourceAsync();
+        RefreshFacetOptions();
+
+        if (tasks.Count > 0)
+        {
+            pendingChartRender = true;
+            chartRenderRetryCount = 0;
+            await JSRuntime.InvokeVoidAsync("setPerformanceChartVisibility", visibleUserIds.ToArray());
+        }
+        else
+            await JSRuntime.InvokeVoidAsync("disposePerformanceChart");
+
+        await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async System.Threading.Tasks.Task LoadFacetSourceAsync()
+    {
+        var response = taskListEngine.Execute(new TaskListRequest
+        {
+            StartDate = startDate,
+            EndDate = endDate,
+            Context = context
+        });
+        facetSourceTasks = response.Success ? response.Data?.Tasks ?? new() : new();
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private long GetTaskEnterpriseId(TaskItem task) =>
+        customerEnterpriseMap.GetValueOrDefault(projectCustomerMap.GetValueOrDefault(task.ProjectId));
+
+    private void RefreshFacetOptions()
+    {
+        var enterpriseCatalog = enterprises.Select(e => (e.Id, e.Description));
+        enterpriseOptions = enterpriseCatalog.ToFacetOptions(
+            facetSourceTasks,
+            GetTaskEnterpriseId,
+            MatchesPerformanceTask(enterpriseId: 0),
+            enterpriseValue);
+
+        var customerCatalog = customerList.Select(c => (c.Id, GetCustomerOptionLabel(c)));
+        customerOptions = customerCatalog.ToFacetOptions(
+            facetSourceTasks,
+            t => projectCustomerMap.GetValueOrDefault(t.ProjectId),
+            MatchesPerformanceTask(customerId: 0),
+            customerValue);
+
+        var projectCatalog = (projectList.Count > 0 ? projectList : allProjects).Select(p => (p.Id, p.Description));
+        projectOptions = projectCatalog.ToFacetOptions(
+            facetSourceTasks,
+            t => t.ProjectId,
+            MatchesPerformanceTask(projectId: 0),
+            projectValue);
+
+        var requirementCatalog = requirementList.Select(r => (r.Id, $"#{r.Id} · {r.Description}"));
+        requirementOptions = requirementCatalog.ToFacetOptions(
+            facetSourceTasks,
+            t => t.TicketId,
+            MatchesPerformanceTask(requirementId: 0),
+            requirementValue);
+
+        var facetTasks = facetSourceTasks.Where(MatchesPerformanceTask()).ToList();
+        periodCounts = DatePeriodHelper.CountByPresets(
+            (rangeStart, rangeEnd) => facetTasks.Count(t =>
+                t.LastExecutionDate.HasValue
+                && DatePeriodHelper.IsDateInRange(t.LastExecutionDate.Value, rangeStart, rangeEnd)),
+            startDate,
+            endDate);
+    }
+
+    private Func<TaskItem, bool> MatchesPerformanceTask(
+        long enterpriseId = -1,
+        long customerId = -1,
+        long projectId = -1,
+        long requirementId = -1)
+    {
+        var enterpriseFilter = enterpriseId == -1 ? enterpriseValue : enterpriseId;
+        var customerFilter = customerId == -1 ? customerValue : customerId;
+        var projectFilter = projectId == -1 ? projectValue : projectId;
+        var requirementFilter = requirementId == -1 ? requirementValue : requirementId;
+
+        return task =>
+            (enterpriseFilter == 0 || GetTaskEnterpriseId(task) == enterpriseFilter)
+            && (customerFilter == 0 || projectCustomerMap.GetValueOrDefault(task.ProjectId) == customerFilter)
+            && (projectFilter == 0 || task.ProjectId == projectFilter)
+            && (requirementFilter == 0 || task.TicketId == requirementFilter);
+    }
+
+    private async System.Threading.Tasks.Task EnsureChartRenderedAsync()
+    {
+        if (tasks.Count == 0)
+        {
+            pendingChartRender = false;
+            chartRenderRetryScheduled = false;
+            return;
+        }
+
+        if (!pendingChartRender && await JSRuntime.InvokeAsync<bool>("performanceChartIsReady"))
+            return;
+
+        pendingChartRender = true;
+        await RenderChartAsync();
+
+        if (await JSRuntime.InvokeAsync<bool>("performanceChartIsReady"))
+        {
+            pendingChartRender = false;
+            chartRenderRetryScheduled = false;
+            chartRenderRetryCount = 0;
+            return;
+        }
+
+        ScheduleChartRenderRetry();
+    }
+
+    private void ScheduleChartRenderRetry()
+    {
+        if (chartRenderRetryScheduled)
+            return;
+
+        chartRenderRetryScheduled = true;
+        _ = InvokeAsync(RetryChartRenderAsync);
+    }
+
+    private async System.Threading.Tasks.Task RetryChartRenderAsync()
+    {
+        try
+        {
+            await System.Threading.Tasks.Task.Delay(100);
+
+            if (tasks.Count == 0)
+            {
+                pendingChartRender = false;
+                return;
+            }
+
+            if (await JSRuntime.InvokeAsync<bool>("performanceChartIsReady"))
+            {
+                pendingChartRender = false;
+                chartRenderRetryCount = 0;
+                return;
+            }
+
+            if (++chartRenderRetryCount > MaxChartRenderRetries)
+            {
+                pendingChartRender = false;
+                return;
+            }
+
+            pendingChartRender = true;
+            StateHasChanged();
+        }
+        finally
+        {
+            chartRenderRetryScheduled = false;
+        }
+    }
+
+    private async System.Threading.Tasks.Task RenderChartAsync()
+    {
+        EnsureVisibleUserIds();
+
+        await JSRuntime.InvokeVoidAsync("renderPerformanceChart", chartCanvasRef, new
+        {
+            tasks = tasks.Select(t => new
+            {
+                userId = t.UserId,
+                taskId = t.TaskId,
+                taskDescription = t.TaskDescription,
+                projectName = t.ProjectName,
+                plannedHours = (double)t.PlannedHours,
+                actualHours = (double)t.ActualHours,
+                deviationPercent = t.DeviationPercent,
+                bugCount = t.BugCount,
+                userName = t.UserName
+            }).ToArray(),
+            employees = employees.Select(e => new
+            {
+                userId = e.UserId,
+                userName = e.UserName,
+                color = e.Color
+            }).ToArray(),
+            visibleUserIds = visibleUserIds.ToArray(),
+            visibilityNotifier = dotNetRef
+        });
+    }
+
+    private void EnsureVisibleUserIds()
+    {
+        var employeeIds = employees.Select(e => e.UserId).ToHashSet();
+        visibleUserIds.RemoveWhere(id => !employeeIds.Contains(id));
+        if (visibleUserIds.Count == 0 && employeeIds.Count > 0)
+            visibleUserIds = employeeIds;
+    }
+
+    private static bool IsCheckboxChecked(ChangeEventArgs e) => e.Value switch
+    {
+        bool value => value,
+        string text when bool.TryParse(text, out var parsed) => parsed,
+        _ => false
+    };
+
+    private async System.Threading.Tasks.Task ToggleEmployeeVisibility(long userId, ChangeEventArgs e)
+    {
+        var isChecked = IsCheckboxChecked(e);
+
+        if (isChecked)
+        {
+            visibleUserIds.Add(userId);
+        }
+        else if (visibleUserIds.Count > 1)
+        {
+            visibleUserIds.Remove(userId);
+        }
+        else
+        {
+            return;
+        }
+
+        await ApplyChartVisibilityAsync();
+    }
+
+    private async System.Threading.Tasks.Task ApplyChartVisibilityAsync()
+    {
+        if (tasks.Count == 0)
+            return;
+
+        await JSRuntime.InvokeVoidAsync("setPerformanceChartVisibility", visibleUserIds.ToArray());
+
+        if (!await JSRuntime.InvokeAsync<bool>("performanceChartIsReady"))
+            pendingChartRender = true;
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async System.Threading.Tasks.Task ShowAllEmployees()
+    {
+        visibleUserIds = employees.Select(e => e.UserId).ToHashSet();
+        await ApplyChartVisibilityAsync();
+    }
+
+    private async System.Threading.Tasks.Task FilterEnterpriseChange(long id)
+    {
+        enterpriseValue = id;
+        customerValue = 0;
+        projectValue = 0;
+        requirementValue = 0;
+        customerList = enterpriseValue > 0
+            ? customerReadEngine.GetCustomersByEnterprise(new CustomerReadRequest { EnterpriseId = enterpriseValue }).Data?.Customers?.ToList() ?? new()
+            : allCustomers.ToList();
+        projectList = new();
+        requirementList = new();
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task FilterCustomerChange(long id)
+    {
+        customerValue = id;
+        projectValue = 0;
+        requirementValue = 0;
+        projectList = customerValue > 0
+            ? projectReadEngine.GetProjectsByCustomer(new ProjectReadRequest { CustomerId = customerValue }).Data?.Projects?.ToList() ?? new()
+            : new();
+        requirementList = new();
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task FilterProjectChange(long id)
+    {
+        projectValue = id;
+        requirementValue = 0;
+        requirementList = projectValue > 0
+            ? catalogEngine.GetTickets(new GetTicketRequest { ProjectId = projectValue }).Data ?? new()
+            : new();
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task FilterRequirementChange(long id)
+    {
+        requirementValue = id;
+        await LoadDataAsync();
+    }
+
+    private async System.Threading.Tasks.Task OnPeriodChanged() => await LoadDataAsync();
+
+    private static string GetCustomerOptionLabel(GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer item) =>
+        string.IsNullOrWhiteSpace(item.Enterprise) ? item.Description : $"{item.Description} ({item.Enterprise})";
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (enterpriseValue > 0) count++;
+        if (customerValue > 0) count++;
+        if (projectValue > 0) count++;
+        if (requirementValue > 0) count++;
+        if (DatePeriodHelper.IsFilterActive(datePreset, startDate, endDate)) count++;
+        return count;
+    }
+
+    private async System.Threading.Tasks.Task ClearFilters()
+    {
+        enterpriseValue = 0;
+        customerValue = 0;
+        projectValue = 0;
+        requirementValue = 0;
+        datePreset = DatePeriodHelper.DefaultPreset;
+        DatePeriodHelper.ApplyPreset(datePreset, out startDate, out endDate);
+        customerList = allCustomers.ToList();
+        projectList = new();
+        requirementList = new();
+        await LoadDataAsync();
+    }
+}

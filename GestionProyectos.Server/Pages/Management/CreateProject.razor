@@ -1,0 +1,285 @@
+@page "/create-project/{ProjectId:long}"
+@inject IJSRuntime JSRuntime
+@inject ICatalogEngine catalogEngine
+@inject IProjectReadEngine projectReadEngine
+@inject IProjectCreateEngine projectCreateEngine
+@inject IProjectUpdateEngine projectUpdateEngine
+@inject ISessionStorageService session
+@inject NavigationManager NavigationManager
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature.Project.Create
+@using GestionProyectos.Engine.Feature.Project.Create.Request
+@using GestionProyectos.Engine.Feature.Project.Read
+@using GestionProyectos.Engine.Feature.Project.Update
+@using GestionProyectos.Engine.Feature.Project.Update.Request
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Engine.Feature
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        @if (!allowed)
+        {
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                No tiene permiso para @(update ? "editar" : "crear") proyectos.
+            </div>
+        }
+        else
+        {
+        @if (!string.IsNullOrWhiteSpace(loadError))
+        {
+            <div class="mb-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">@loadError</div>
+        }
+        <h1 class="@Tw.PageTitle mb-2">@(update ? "Editar Proyecto" : "Nuevo Proyecto")</h1>
+
+        <div class="@Tw.FormCard">
+            @if (!string.IsNullOrWhiteSpace(formError))
+            {
+                <div class="rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">@formError</div>
+            }
+            <div class="@Tw.FormGridSm">
+                <div>
+                    <label class="@Tw.FormLabel">Empresa</label>
+                    <select class="@Tw.FormSelect" @onchange="HandleEnterpriseChange">
+                        <option value="0">-- Todas --</option>
+                        @foreach (var item in enterprises)
+                        {
+                            <option value="@item.Id" selected="@(item.Id == filterEnterpriseId)">@item.Description</option>
+                        }
+                    </select>
+                </div>
+                <div>
+                    <label class="@Tw.FormLabel">Cliente</label>
+                    <select class="@FieldClass(customerError)" @bind="customerId">
+                        <option value="0">-- Selecciona --</option>
+                        @foreach (var item in filterCustomers)
+                        {
+                            <option value="@item.Id">@GetCustomerOptionLabel(item)</option>
+                        }
+                    </select>
+                    <FormFieldError Message="@customerError" />
+                </div>
+            </div>
+
+            <div>
+                <label class="@Tw.FormLabel">Nombre</label>
+                <input type="text" class="@FieldClass(descriptionError)" @bind="description" />
+                <FormFieldError Message="@descriptionError" />
+            </div>
+
+            <div class="@Tw.FormGridSm">
+                <div>
+                    <label class="@Tw.FormLabel">Estado</label>
+                    <select class="@FieldClass(statusError)" @bind="statusId">
+                        <option value="0">-- Selecciona --</option>
+                        @foreach (var item in GetSelectableProjectStatuses())
+                        {
+                            <option value="@item.Id">@item.Description</option>
+                        }
+                    </select>
+                    <FormFieldError Message="@statusError" />
+                </div>
+                <div>
+                    <label class="@Tw.FormLabel">Fecha inicio planificada</label>
+                    <input type="date" class="@Tw.FormDate" @bind="startDate" />
+                </div>
+            </div>
+
+            <div class="@Tw.FormGridSm">
+                <div>
+                    <label class="@Tw.FormLabel">Fecha límite</label>
+                    <input type="date" class="@FieldClass(endDateError)" @bind="endDate" />
+                    <FormFieldError Message="@endDateError" />
+                </div>
+                @if (update)
+                {
+                    <div>
+                        <label class="@Tw.FormLabel">Fecha fin real</label>
+                        <input type="date" class="@Tw.FormDate" @bind="actualEndDate" />
+                    </div>
+                }
+            </div>
+            <div class="flex gap-2 pt-1">
+                @if (update && perms.CanEdit)
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="UpdateProject">Actualizar</button>
+                }
+                else if (!update && perms.CanCreate)
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="SaveProject">Guardar</button>
+                }
+                <button type="button" class="@Tw.BtnOutline" @onclick="Cancel">Cancelar</button>
+            </div>
+        </div>
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public long ProjectId { get; set; }
+
+    private List<Enterprise> enterprises = new();
+    private List<Customer> allCustomers = new();
+    private List<Customer> filterCustomers = new();
+    private List<ProjectStatus> statuses = new();
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private bool update;
+    private bool allowed;
+
+    private long filterEnterpriseId, customerId, statusId;
+    private string description = string.Empty;
+    private DateTime startDate = DateTime.Today;
+    private DateTime? endDate, actualEndDate;
+    private string? formError;
+    private string? customerError;
+    private string? descriptionError;
+    private string? statusError;
+    private string? endDateError;
+    private string? loadError;
+
+    private static string FieldClass(string? error) =>
+        string.IsNullOrWhiteSpace(error) ? Tw.FormInput : Tw.FormInputError;
+
+    private IEnumerable<ProjectStatus> GetSelectableProjectStatuses()
+    {
+        foreach (var item in statuses)
+        {
+            if (!perms.CanFinalize &&
+                FinalizeStatusHelper.IsProjectFinalized(item.IsClosed) &&
+                item.Id != statusId)
+                continue;
+
+            yield return item;
+        }
+    }
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/project-list");
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        allCustomers = catalogEngine.GetCustomers().Data ?? new();
+        statuses = catalogEngine.GetProjectStatuses().Data ?? new();
+        update = ProjectId > 0;
+        allowed = perms.CanView && (update ? perms.CanEdit : perms.CanCreate);
+        if (!update)
+        {
+            statusId = statuses.FirstOrDefault(s =>
+                s.Description.Equals("Planificado", StringComparison.OrdinalIgnoreCase))?.Id ?? 0;
+        }
+        if (update && allowed) await LoadProject();
+    }
+
+    private async System.Threading.Tasks.Task LoadProject()
+    {
+        var response = projectReadEngine.GetProjectById(ProjectId);
+        if (!response.Success)
+        {
+            loadError = response.Message.Description;
+            return;
+        }
+
+        var project = response.Data?.Projects.FirstOrDefault();
+        if (project == null)
+        {
+            loadError = "Proyecto no encontrado.";
+            return;
+        }
+        description = project.Description;
+        customerId = project.CustomerId;
+        statusId = project.ProjectStatusId;
+        startDate = project.StartDate;
+        endDate = project.EndDate;
+        actualEndDate = project.ActualEndDate;
+
+        var customer = allCustomers.FirstOrDefault(c => c.Id == customerId);
+        if (customer != null)
+        {
+            filterEnterpriseId = customer.EnterpriseId;
+            filterCustomers = allCustomers.Where(c => c.EnterpriseId == filterEnterpriseId).ToList();
+        }
+        else
+        {
+            filterCustomers = allCustomers.ToList();
+        }
+    }
+
+    private void HandleEnterpriseChange(ChangeEventArgs e)
+    {
+        filterEnterpriseId = long.Parse(e.Value!.ToString()!);
+        customerId = 0;
+        filterCustomers = filterEnterpriseId > 0
+            ? allCustomers.Where(c => c.EnterpriseId == filterEnterpriseId).ToList()
+            : allCustomers.ToList();
+    }
+
+    private string GetEnterpriseName(long id) =>
+        enterprises.FirstOrDefault(e => e.Id == id)?.Description ?? "—";
+
+    private string GetCustomerOptionLabel(Customer customer) =>
+        $"{customer.Description} · {GetEnterpriseName(customer.EnterpriseId)}";
+
+    private bool ValidateForm()
+    {
+        formError = customerError = descriptionError = statusError = endDateError = null;
+        var valid = true;
+        if (customerId == 0) { customerError = "Seleccione un cliente."; valid = false; }
+        if (statusId == 0) { statusError = "Seleccione un estado."; valid = false; }
+        if (string.IsNullOrWhiteSpace(description)) { descriptionError = "El nombre es obligatorio."; valid = false; }
+        if (!endDate.HasValue) { endDateError = "La fecha límite es obligatoria."; valid = false; }
+        else if (endDate.Value.Date < startDate.Date)
+        {
+            endDateError = "La fecha límite no puede ser anterior al inicio.";
+            valid = false;
+        }
+        return valid;
+    }
+
+    private void SaveProject()
+    {
+        if (!ValidateForm()) return;
+
+        var response = projectCreateEngine.Execute(new ProjectCreateRequest
+        {
+            CustomerId = customerId,
+            Description = description,
+            ProjectStatusId = statusId,
+            StartDate = startDate,
+            EndDate = endDate,
+            ActualEndDate = null,
+            Context = context
+        });
+
+        if (!response.Success) { formError = response.Message.Description; return; }
+        NavigationManager.NavigateTo("/project-list");
+    }
+
+    private void UpdateProject()
+    {
+        if (!ValidateForm()) return;
+
+        var response = projectUpdateEngine.Execute(new ProjectUpdateRequest
+        {
+            Id = ProjectId,
+            CustomerId = customerId,
+            ProjectStatusId = statusId,
+            Description = description,
+            StartDate = startDate,
+            EndDate = endDate,
+            ActualEndDate = actualEndDate,
+            Context = context
+        });
+
+        if (!response.Success) { formError = response.Message.Description; return; }
+        NavigationManager.NavigateTo("/project-list");
+    }
+
+    private void Cancel() => NavigationManager.NavigateTo("/project-list");
+}

@@ -1,0 +1,45 @@
+<div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
+    <div class="@Tw.ToolbarPrimaryGroup">
+        @if (LeadingContent != null)
+        {
+            @LeadingContent
+        }
+        @if (LeadingContent != null && (ShowSearch || ShowViewMode || TrailingContent != null))
+        {
+            <span class="@Tw.ToolbarDivider"></span>
+        }
+        @if (ShowSearch)
+        {
+            <TableSearchBox Value="@SearchValue" ValueChanged="SearchValueChanged" Compact="true" />
+        }
+        @if (ShowViewMode && ViewMode != null)
+        {
+            <ViewModeToggle ViewMode="@ViewMode" ViewModeChanged="ViewModeChanged" />
+        }
+        @if (TrailingContent != null)
+        {
+            @TrailingContent
+        }
+        @if (OnRefresh.HasDelegate)
+        {
+            @if (LeadingContent != null || ShowSearch || ShowViewMode || TrailingContent != null)
+            {
+                <span class="@Tw.ToolbarDivider"></span>
+            }
+            <TableRefreshButton OnClick="OnRefresh" Disabled="@Refreshing" />
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public RenderFragment? LeadingContent { get; set; }
+    [Parameter] public RenderFragment? TrailingContent { get; set; }
+    [Parameter] public bool ShowSearch { get; set; }
+    [Parameter] public string SearchValue { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> SearchValueChanged { get; set; }
+    [Parameter] public bool ShowViewMode { get; set; }
+    [Parameter] public string? ViewMode { get; set; }
+    [Parameter] public EventCallback<string> ViewModeChanged { get; set; }
+    [Parameter] public EventCallback OnRefresh { get; set; }
+    [Parameter] public bool Refreshing { get; set; }
+}

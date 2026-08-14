@@ -1,0 +1,921 @@
+﻿@inject IJSRuntime JSRuntime
+@inject ISecurityAdminEngine securityAdminEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.Security
+@using GestionProyectos.Engine.Security.Admin
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using GestionProyectos.Shared.Message
+@using GestionProyectos.Engine.Security.Admin.Request
+@using Microsoft.AspNetCore.Components.Authorization
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="@PermissionPage">
+        <PageHeader Title="@Title" Subtitle="@Subtitle">
+            <Actions>
+                @if (Section == "roles")
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="StartCreateRole" disabled="@creatingRole">
+                        <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                    </button>
+                }
+                else if (Section == "menus")
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="StartCreateMenu" disabled="@creatingMenu">
+                        <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                    </button>
+                }
+                else if (Section == "userroles")
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="StartCreateUserRole" disabled="@creatingUserRole">
+                        <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                    </button>
+                }
+                @if (Section != "rolemenus")
+                {
+                    <input type="text" class="@Tw.FilterInput" @bind-value="searchInput" placeholder="Buscar..." @bind-value:event="oninput" />
+                }
+                <TableRefreshButton OnClick="LoadForSection" />
+            </Actions>
+        </PageHeader>
+
+        @if (Section == "roles")
+        {
+            <div class="@Tw.TableWrapContained">
+                <table class="@Tw.Table">
+                    <colgroup>
+                        <col class="w-14" />
+                        <col />
+                        <col class="w-28" />
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <SortableTh Column="Id" State="tableState" OnSorted="ApplyActiveView">Id</SortableTh>
+                            <SortableTh Column="Description" State="tableState" OnSorted="ApplyActiveView">Descripción</SortableTh>
+                            <th class="@Tw.ThActionsAuto"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (creatingRole)
+                        {
+                            <tr>
+                                <td class="@Tw.Td text-gray-400">Nuevo</td>
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newRoleDescription" /></td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="CreateRole">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="CancelRole">Cancelar</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        @foreach (var item in displayRoles)
+                        {
+                            <tr class="hover:bg-gray-50">
+                                <td class="@Tw.Td w-14">@item.Id</td>
+                                @if (editingRoleId == item.Id)
+                                {
+                                    <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="editRoleDescription" /></td>
+                                    <td class="@Tw.TdActionsAuto">
+                                        <div class="@Tw.TableActions">
+                                            <button type="button" class="@Tw.TableBtn" @onclick="() => UpdateRole(item.Id)">Guardar</button>
+                                            <button type="button" class="@Tw.TableBtn" @onclick="CancelRole">Cancelar</button>
+                                        </div>
+                                    </td>
+                                }
+                                else
+                                {
+                                    <td class="@Tw.TdText" title="@item.Description">@item.Description</td>
+                                    <td class="@Tw.TdActionsAuto">
+                                        <TableRowActionsMenu>
+                                            <TableRowAction Label="Editar" OnClick="@(() => StartEditRole(item))" />
+                                            <TableRowAction Label="Eliminar" Danger OnClick="@(() => DeleteRole(item.Id))" />
+                                        </TableRowActionsMenu>
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyActiveView" />
+        }
+        else if (Section == "menus")
+        {
+            <div class="@Tw.TableWrapContained">
+                <table class="@Tw.TableFluid">
+                    <colgroup>
+                        <col class="w-14" />
+                        <col class="min-w-[10rem]" />
+                        <col class="w-14" />
+                        <col class="w-32" />
+                        <col class="w-28" />
+                        <col class="w-14" />
+                        <col class="w-28" />
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <SortableTh Column="Id" State="tableState" OnSorted="ApplyActiveView">Id</SortableTh>
+                            <SortableTh Column="Description" State="tableState" OnSorted="ApplyActiveView">Descripción</SortableTh>
+                            <SortableTh Column="Icon" State="tableState" OnSorted="ApplyActiveView" CssClass="w-14">Icono</SortableTh>
+                            <SortableTh Column="Page" State="tableState" OnSorted="ApplyActiveView" CssClass="w-40">Página</SortableTh>
+                            <SortableTh Column="Parent" State="tableState" OnSorted="ApplyActiveView" CssClass="w-32">Padre</SortableTh>
+                            <SortableTh Column="Order" State="tableState" OnSorted="ApplyActiveView" CssClass="w-14">Orden</SortableTh>
+                            <th class="@Tw.ThActionsAuto"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (creatingMenu)
+                        {
+                            <tr>
+                                <td class="@Tw.Td text-gray-400">Nuevo</td>
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newMenuDescription" /></td>
+                                <td class="@Tw.TdEdit"><input type="number" class="@Tw.TableInput" @bind="newMenuIcon" /></td>
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newMenuPage" placeholder="/ruta" /></td>
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" @bind="newMenuParentId">
+                                        <option value="0">— Sin padre —</option>
+                                        @foreach (var m in menus.Where(x => string.IsNullOrEmpty(x.Page)))
+                                        {
+                                            <option value="@m.Id">@m.Description</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdEdit"><input type="number" class="@Tw.TableInput" @bind="newMenuOrder" /></td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="CreateMenu">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="CancelMenu">Cancelar</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        @foreach (var entry in displayMenuEntries)
+                        {
+                            var item = entry.Menu;
+                            var isChild = entry.IsChild;
+                            <tr class="@(isChild ? Tw.MenuChildRow : Tw.MenuParentRow) hover:bg-gray-50">
+                                <td class="@Tw.Td w-14">@item.Id</td>
+                                @if (editingMenuId == item.Id)
+                                {
+                                    <td class="@Tw.TdEdit @(isChild ? "pl-6" : "")">
+                                        @if (isChild) { <span class="text-gray-400">└ </span> }
+                                        <input type="text" class="@Tw.TableInput" @bind="editMenuDescription" />
+                                    </td>
+                                    <td class="@Tw.TdEdit"><input type="number" class="@Tw.TableInput" @bind="editMenuIcon" /></td>
+                                    <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="editMenuPage" /></td>
+                                    <td class="@Tw.TdEdit">
+                                        <select class="@Tw.TableSelect" @bind="editMenuParentId">
+                                            <option value="0">— Sin padre —</option>
+                                            @foreach (var m in menus.Where(x => string.IsNullOrEmpty(x.Page)))
+                                            {
+                                                <option value="@m.Id">@m.Description</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    <td class="@Tw.TdEdit"><input type="number" class="@Tw.TableInput" @bind="editMenuOrder" /></td>
+                                    <td class="@Tw.TdActionsAuto">
+                                        <div class="@Tw.TableActions">
+                                            <button type="button" class="@Tw.TableBtn" @onclick="() => UpdateMenu(item.Id)">Guardar</button>
+                                            <button type="button" class="@Tw.TableBtn" @onclick="CancelMenu">Cancelar</button>
+                                        </div>
+                                    </td>
+                                }
+                                else
+                                {
+                                    <td class="@Tw.TdText @(isChild ? "pl-6" : "")" title="@item.Description">
+                                        @if (isChild) { <span class="text-gray-400">└ </span> }
+                                        @item.Description
+                                    </td>
+                                    <td class="@Tw.Td w-14">@item.Icon</td>
+                                    <td class="@Tw.TdText w-40 @(string.IsNullOrWhiteSpace(item.Page) ? "text-gray-400" : "")" title="@item.Page">@(string.IsNullOrWhiteSpace(item.Page) ? "—" : item.Page)</td>
+                                    <td class="@Tw.TdText w-32" title="@(isChild ? GetMenuDescription(item.Parent) : "—")">@(isChild ? GetMenuDescription(item.Parent) : "—")</td>
+                                    <td class="@Tw.Td w-14">@item.Order</td>
+                                    <td class="@Tw.TdActionsAuto">
+                                        <TableRowActionsMenu>
+                                            <TableRowAction Label="Editar" OnClick="@(() => StartEditMenu(item))" />
+                                            <TableRowAction Label="Eliminar" Danger OnClick="@(() => DeleteMenu(item.Id))" />
+                                        </TableRowActionsMenu>
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else if (Section == "userroles")
+        {
+            <div class="@Tw.TableWrapContained">
+                <table class="@Tw.Table">
+                    <colgroup>
+                        <col class="w-14" />
+                        <col />
+                        <col class="w-44" />
+                        <col class="w-28" />
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <SortableTh Column="Id" State="tableState" OnSorted="ApplyActiveView">Id</SortableTh>
+                            <SortableTh Column="User" State="tableState" OnSorted="ApplyActiveView">Usuario</SortableTh>
+                            <SortableTh Column="Role" State="tableState" OnSorted="ApplyActiveView" CssClass="w-44">Rol</SortableTh>
+                            <th class="@Tw.ThActionsAuto"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (creatingUserRole)
+                        {
+                            <tr>
+                                <td class="@Tw.Td text-gray-400">Nuevo</td>
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" @bind="newUrUserId">
+                                        <option value="0">-- Selecciona --</option>
+                                        @foreach (var u in users) { <option value="@u.Id">@GetUserLabel(u.Id)</option> }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" @bind="newUrRoleId">
+                                        <option value="0">-- Selecciona --</option>
+                                        @foreach (var r in roles) { <option value="@r.Id">@r.Description</option> }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="CreateUserRole">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="CancelUserRole">Cancelar</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        @foreach (var item in displayUserRoles)
+                        {
+                            <tr class="hover:bg-gray-50">
+                                <td class="@Tw.Td w-14">@item.Id</td>
+                                @if (editingUserRoleId == item.Id)
+                                {
+                                    <td class="@Tw.TdEdit">
+                                        <select class="@Tw.TableSelect" @bind="editUrUserId">
+                                            <option value="0">-- Selecciona --</option>
+                                            @foreach (var u in users) { <option value="@u.Id">@GetUserLabel(u.Id)</option> }
+                                        </select>
+                                    </td>
+                                    <td class="@Tw.TdEdit">
+                                        <select class="@Tw.TableSelect" @bind="editUrRoleId">
+                                            <option value="0">-- Selecciona --</option>
+                                            @foreach (var r in roles) { <option value="@r.Id">@r.Description</option> }
+                                        </select>
+                                    </td>
+                                    <td class="@Tw.TdActionsAuto">
+                                        <div class="@Tw.TableActions">
+                                            <button type="button" class="@Tw.TableBtn" @onclick="() => UpdateUserRole(item.Id)">Guardar</button>
+                                            <button type="button" class="@Tw.TableBtn" @onclick="CancelUserRole">Cancelar</button>
+                                        </div>
+                                    </td>
+                                }
+                                else
+                                {
+                                    <td class="@Tw.TdText" title="@GetUserLabel(item.UserId)">@GetUserLabel(item.UserId)</td>
+                                    <td class="@Tw.TdText w-44" title="@GetRoleDescription(item.RoleId)">@GetRoleDescription(item.RoleId)</td>
+                                    <td class="@Tw.TdActionsAuto">
+                                        <TableRowActionsMenu>
+                                            <TableRowAction Label="Editar" OnClick="@(() => StartEditUserRole(item))" />
+                                            <TableRowAction Label="Eliminar" Danger OnClick="@(() => DeleteUserRole(item.Id))" />
+                                        </TableRowActionsMenu>
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyActiveView" />
+        }
+        else if (Section == "rolemenus")
+        {
+            <div class="mb-2 flex flex-wrap items-center gap-2">
+                <FilterField Label="Rol">
+                    <select class="@Tw.FilterSelect min-w-[12rem]" @onchange="OnRoleMenuRoleChange">
+                        <option value="0">— Selecciona —</option>
+                        @foreach (var r in roles)
+                        {
+                            <option value="@r.Id" selected="@(r.Id == roleMenuRoleId)">@r.Description</option>
+                        }
+                    </select>
+                </FilterField>
+                <button type="button" class="@Tw.BtnPrimary" disabled="@(roleMenuRoleId == 0)" @onclick="SaveRoleMenus">
+                    <LucideIcon Name="save" CssClass="h-3.5 w-3.5" /> Guardar permisos
+                </button>
+            </div>
+
+            @if (roleMenuRoleId == 0)
+            {
+                <p class="text-xs text-gray-500">Selecciona un rol para asignar permisos.</p>
+            }
+            else
+            {
+                <div class="@Tw.TableWrapContained">
+                    <div class="max-h-[28rem] overflow-y-auto">
+                        <table class="@Tw.TableFluid">
+                            <colgroup>
+                                <col class="min-w-[12rem]" />
+                                <col class="w-10" />
+                                <col class="w-10" />
+                                <col class="w-10" />
+                                <col class="w-10" />
+                                <col class="w-12" />
+                            </colgroup>
+                            <thead class="sticky top-0 z-10 bg-gray-50">
+                                <tr>
+                                    <th class="@Tw.Th">Funcionalidad</th>
+                                    <th class="@($"{Tw.Th} text-center")">Ver</th>
+                                    <th class="@($"{Tw.Th} text-center")">Crear</th>
+                                    <th class="@($"{Tw.Th} text-center")">Editar</th>
+                                    <th class="@($"{Tw.Th} text-center")">Eliminar</th>
+                                    <th class="@($"{Tw.Th} text-center")">Finalizar</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var entry in GetMenusForDisplay())
+                                {
+                                    var menu = entry.Menu;
+                                    var isChild = entry.IsChild;
+                                    var isGroup = string.IsNullOrWhiteSpace(menu.Page);
+                                    var state = GetMenuPermission(menu.Id);
+                                    <tr class="@(isChild ? Tw.MenuChildRow : Tw.MenuParentRow) hover:bg-gray-50/80">
+                                        <td class="@($"{Tw.TdText} {(isChild ? "pl-6" : "")}")" title="@menu.Description">
+                                            @if (isChild)
+                                            {
+                                                <span class="text-gray-400">└ </span>
+                                            }
+                                            <span class="@(isGroup ? "font-semibold" : "")">@menu.Description</span>
+                                            @if (!string.IsNullOrWhiteSpace(menu.Page))
+                                            {
+                                                <span class="ml-1 text-gray-400">@menu.Page</span>
+                                            }
+                                        </td>
+                                        <td class="@($"{Tw.Td} text-center")">
+                                            <input type="checkbox" class="@RoleMenuCheckboxClass" checked="@state.CanView" @onchange='e => SetMenuPermission(menu.Id, "view", e)' />
+                                        </td>
+                                        <td class="@($"{Tw.Td} text-center")">
+                                            @if (isGroup)
+                                            {
+                                                <span class="text-xs text-gray-300">—</span>
+                                            }
+                                            else
+                                            {
+                                                <input type="checkbox" class="@RoleMenuCheckboxClass" checked="@state.CanCreate" disabled="@(!state.CanView)" @onchange='e => SetMenuPermission(menu.Id, "create", e)' />
+                                            }
+                                        </td>
+                                        <td class="@($"{Tw.Td} text-center")">
+                                            @if (isGroup)
+                                            {
+                                                <span class="text-xs text-gray-300">—</span>
+                                            }
+                                            else
+                                            {
+                                                <input type="checkbox" class="@RoleMenuCheckboxClass" checked="@state.CanEdit" disabled="@(!state.CanView)" @onchange='e => SetMenuPermission(menu.Id, "edit", e)' />
+                                            }
+                                        </td>
+                                        <td class="@($"{Tw.Td} text-center")">
+                                            @if (isGroup)
+                                            {
+                                                <span class="text-xs text-gray-300">—</span>
+                                            }
+                                            else
+                                            {
+                                                <input type="checkbox" class="@RoleMenuCheckboxClass" checked="@state.CanDelete" disabled="@(!state.CanView)" @onchange='e => SetMenuPermission(menu.Id, "delete", e)' />
+                                            }
+                                        </td>
+                                        <td class="@($"{Tw.Td} text-center")">
+                                            @if (isGroup || !SupportsFinalizePermission(menu))
+                                            {
+                                                <span class="text-xs text-gray-300">—</span>
+                                            }
+                                            else
+                                            {
+                                                <input type="checkbox" class="@RoleMenuCheckboxClass" checked="@state.CanFinalize" disabled="@(!state.CanView)" @onchange='e => SetMenuPermission(menu.Id, "finalize", e)' />
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            }
+        }
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public string Section { get; set; } = "roles";
+    [Parameter] public string PermissionPage { get; set; } = "/security-roles";
+    [Parameter] public string Title { get; set; } = "Roles";
+    [Parameter] public string Subtitle { get; set; } = "Catálogo de roles del sistema.";
+
+    private Context context = new();
+    private readonly PagedTableState tableState = new();
+    private string? searchText;
+
+    private List<User> users = new();
+    private List<Role> roles = new();
+    private List<Role> displayRoles = new();
+    private List<Menu> menus = new();
+    private List<(Menu Menu, bool IsChild)> displayMenuEntries = new();
+    private List<UserRole> userRoles = new();
+    private List<UserRole> displayUserRoles = new();
+    private List<RoleMenu> roleMenus = new();
+
+    private bool creatingRole, creatingMenu, creatingUserRole;
+    private long editingRoleId, editingMenuId, editingUserRoleId;
+
+    private long roleMenuRoleId;
+    private readonly Dictionary<long, MenuPermissionState> roleMenuPermissions = new();
+    private const string RoleMenuCheckboxClass = "h-3 w-3 rounded-sm border-gray-300 text-primary-600 focus:ring-primary-500/30 disabled:opacity-40";
+
+    private sealed class MenuPermissionState
+    {
+        public bool CanView { get; set; }
+        public bool CanCreate { get; set; }
+        public bool CanEdit { get; set; }
+        public bool CanDelete { get; set; }
+        public bool CanFinalize { get; set; }
+    }
+
+    private string newRoleDescription = "", editRoleDescription = "";
+    private string newMenuDescription = "", editMenuDescription = "", newMenuPage = "", editMenuPage = "";
+    private int newMenuIcon, editMenuIcon, newMenuOrder, editMenuOrder;
+    private long newMenuParentId, editMenuParentId;
+    private long newUrUserId, editUrUserId, newUrRoleId, editUrRoleId;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        LoadForSection();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private void LoadForSection()
+    {
+        switch (Section)
+        {
+            case "roles":
+                LoadRoles();
+                break;
+            case "menus":
+                tableState.SortColumn = "Order";
+                tableState.SortAscending = true;
+                LoadMenus();
+                break;
+            case "userroles":
+                LoadUsers();
+                LoadRoles();
+                LoadUserRoles();
+                break;
+            case "rolemenus":
+                LoadRoles();
+                LoadMenus();
+                LoadRoleMenus();
+                if (roleMenuRoleId == 0 && roles.Count > 0)
+                    roleMenuRoleId = roles[0].Id;
+                LoadRoleMenuSelection();
+                break;
+        }
+    }
+
+    private void ApplyActiveView()
+    {
+        switch (Section)
+        {
+            case "roles": ApplyRolesView(); break;
+            case "menus": ApplyMenusView(); break;
+            case "userroles": ApplyUserRolesView(); break;
+        }
+    }
+
+    private void LoadUsers()
+    {
+        var r = securityAdminEngine.GetUsers();
+        if (!r.Success) { JSRuntime.InvokeVoidAsync("alert", r.Message.Description); return; }
+        users = r.Data ?? new();
+    }
+
+    private void ApplyRolesView()
+    {
+        IEnumerable<Role> query = roles;
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText;
+            query = query.Where(x => TableSearch.Matches(s, x.Id.ToString(), x.Description));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Description" => tableState.SortAscending ? query.OrderBy(x => x.Description) : query.OrderByDescending(x => x.Description),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        var list = query.ToList();
+        tableState.SetPageCount(list.Count);
+        displayRoles = tableState.Paginate(list).ToList();
+    }
+
+    private void ApplyMenusView()
+    {
+        var visibleIds = GetVisibleMenuIds(tableState.SearchText);
+        var sortColumn = tableState.SortColumn;
+        var ascending = tableState.SortAscending;
+        var entries = new List<(Menu Menu, bool IsChild)>();
+
+        var parents = menus
+            .Where(m => m.Parent == null && visibleIds.Contains(m.Id))
+            .ToList();
+
+        foreach (var parent in SortMenus(parents, sortColumn, ascending))
+        {
+            entries.Add((parent, false));
+
+            var children = menus
+                .Where(m => m.Parent == parent.Id && visibleIds.Contains(m.Id))
+                .ToList();
+
+            foreach (var child in SortMenus(children, sortColumn, ascending))
+                entries.Add((child, true));
+        }
+
+        var parentIds = menus.Where(m => m.Parent == null).Select(m => m.Id).ToHashSet();
+        var orphans = menus
+            .Where(m => m.Parent.HasValue && !parentIds.Contains(m.Parent.Value) && visibleIds.Contains(m.Id))
+            .ToList();
+
+        foreach (var orphan in SortMenus(orphans, sortColumn, ascending))
+            entries.Add((orphan, false));
+
+        displayMenuEntries = entries;
+    }
+
+    private HashSet<long> GetVisibleMenuIds(string? search)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+            return menus.Select(m => m.Id).ToHashSet();
+
+        var matching = menus.Where(m => MenuMatchesSearch(m, search)).Select(m => m.Id).ToHashSet();
+        var visible = new HashSet<long>(matching);
+
+        foreach (var menu in menus.Where(m => matching.Contains(m.Id)))
+        {
+            if (menu.Parent.HasValue)
+                visible.Add(menu.Parent.Value);
+        }
+
+        foreach (var parent in menus.Where(m => m.Parent == null && matching.Contains(m.Id)))
+        {
+            foreach (var child in menus.Where(m => m.Parent == parent.Id))
+                visible.Add(child.Id);
+        }
+
+        return visible;
+    }
+
+    private bool MenuMatchesSearch(Menu menu, string search) =>
+        TableSearch.Matches(search,
+            menu.Id.ToString(),
+            menu.Description,
+            menu.Icon.ToString(),
+            menu.Page,
+            GetMenuDescription(menu.Parent),
+            menu.Order.ToString());
+
+    private IEnumerable<Menu> SortMenus(IEnumerable<Menu> items, string sortColumn, bool ascending) =>
+        sortColumn switch
+        {
+            "Description" => ascending
+                ? items.OrderBy(m => m.Description).ThenBy(m => m.Id)
+                : items.OrderByDescending(m => m.Description).ThenByDescending(m => m.Id),
+            "Icon" => ascending
+                ? items.OrderBy(m => m.Icon).ThenBy(m => m.Id)
+                : items.OrderByDescending(m => m.Icon).ThenByDescending(m => m.Id),
+            "Page" => ascending
+                ? items.OrderBy(m => m.Page).ThenBy(m => m.Id)
+                : items.OrderByDescending(m => m.Page).ThenByDescending(m => m.Id),
+            "Parent" => ascending
+                ? items.OrderBy(m => GetMenuDescription(m.Parent)).ThenBy(m => m.Id)
+                : items.OrderByDescending(m => GetMenuDescription(m.Parent)).ThenByDescending(m => m.Id),
+            "Id" => ascending
+                ? items.OrderBy(m => m.Id)
+                : items.OrderByDescending(m => m.Id),
+            _ => ascending
+                ? items.OrderBy(m => m.Order).ThenBy(m => m.Id)
+                : items.OrderByDescending(m => m.Order).ThenByDescending(m => m.Id)
+        };
+
+    private void ApplyUserRolesView()
+    {
+        IEnumerable<UserRole> query = userRoles;
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText;
+            query = query.Where(x => TableSearch.Matches(s,
+                x.Id.ToString(),
+                GetUserLabel(x.UserId),
+                GetRoleDescription(x.RoleId)));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "User" => tableState.SortAscending
+                ? query.OrderBy(x => GetUserLabel(x.UserId))
+                : query.OrderByDescending(x => GetUserLabel(x.UserId)),
+            "Role" => tableState.SortAscending
+                ? query.OrderBy(x => GetRoleDescription(x.RoleId))
+                : query.OrderByDescending(x => GetRoleDescription(x.RoleId)),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        var list = query.ToList();
+        tableState.SetPageCount(list.Count);
+        displayUserRoles = tableState.Paginate(list).ToList();
+    }
+
+    private string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyActiveView();
+        }
+    }
+
+    private void LoadRoles()
+    {
+        var r = securityAdminEngine.GetRoles();
+        if (!r.Success) { JSRuntime.InvokeVoidAsync("alert", r.Message.Description); return; }
+        roles = r.Data ?? new();
+        if (Section == "roles" || Section == "rolemenus") ApplyActiveView();
+    }
+
+    private void LoadMenus()
+    {
+        var r = securityAdminEngine.GetMenus();
+        if (!r.Success) { JSRuntime.InvokeVoidAsync("alert", r.Message.Description); return; }
+        menus = r.Data ?? new();
+        if (Section == "menus") ApplyMenusView();
+    }
+
+    private void LoadUserRoles()
+    {
+        var r = securityAdminEngine.GetUserRoles();
+        if (!r.Success) { JSRuntime.InvokeVoidAsync("alert", r.Message.Description); return; }
+        userRoles = r.Data ?? new();
+        if (Section == "userroles") ApplyUserRolesView();
+    }
+
+    private void LoadRoleMenus()
+    {
+        var r = securityAdminEngine.GetRoleMenus();
+        if (!r.Success) { JSRuntime.InvokeVoidAsync("alert", r.Message.Description); return; }
+        roleMenus = r.Data ?? new();
+        if (Section == "rolemenus" && roleMenuRoleId > 0)
+            LoadRoleMenuSelection();
+    }
+
+    private IEnumerable<Menu> GetParentMenus() =>
+        menus.Where(m => m.Parent == null).OrderBy(m => m.Order);
+
+    private IEnumerable<Menu> GetChildMenus(long parentId) =>
+        menus.Where(m => m.Parent == parentId).OrderBy(m => m.Order);
+
+    private IEnumerable<Menu> GetOrphanMenus()
+    {
+        var parentIds = menus.Where(m => m.Parent == null).Select(m => m.Id).ToHashSet();
+        return menus.Where(m => m.Parent.HasValue && !parentIds.Contains(m.Parent.Value)).OrderBy(m => m.Order);
+    }
+
+    private IEnumerable<(Menu Menu, bool IsChild)> GetMenusForDisplay()
+    {
+        foreach (var parent in GetParentMenus())
+        {
+            yield return (parent, false);
+            foreach (var child in GetChildMenus(parent.Id))
+                yield return (child, true);
+        }
+        foreach (var orphan in GetOrphanMenus())
+            yield return (orphan, false);
+    }
+
+    private void OnRoleMenuRoleChange(ChangeEventArgs e)
+    {
+        roleMenuRoleId = long.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        LoadRoleMenuSelection();
+    }
+
+    private void LoadRoleMenuSelection()
+    {
+        roleMenuPermissions.Clear();
+        foreach (var menu in menus)
+            roleMenuPermissions[menu.Id] = new MenuPermissionState();
+
+        foreach (var rm in roleMenus.Where(rm => rm.RoleId == roleMenuRoleId))
+        {
+            roleMenuPermissions[rm.MenuId] = new MenuPermissionState
+            {
+                CanView = rm.CanView,
+                CanCreate = rm.CanCreate,
+                CanEdit = rm.CanEdit,
+                CanDelete = rm.CanDelete,
+                CanFinalize = rm.CanFinalize
+            };
+        }
+    }
+
+    private MenuPermissionState GetMenuPermission(long menuId) =>
+        roleMenuPermissions.TryGetValue(menuId, out var state) ? state : new MenuPermissionState();
+
+    private void SetMenuPermission(long menuId, string field, ChangeEventArgs e)
+    {
+        if (!roleMenuPermissions.TryGetValue(menuId, out var state))
+        {
+            state = new MenuPermissionState();
+            roleMenuPermissions[menuId] = state;
+        }
+
+        var isChecked = e.Value is bool value && value;
+        switch (field)
+        {
+            case "view":
+                state.CanView = isChecked;
+                if (!isChecked)
+                {
+                    state.CanCreate = false;
+                    state.CanEdit = false;
+                    state.CanDelete = false;
+                    state.CanFinalize = false;
+                }
+                break;
+            case "create":
+                state.CanCreate = isChecked;
+                break;
+            case "edit":
+                state.CanEdit = isChecked;
+                break;
+            case "delete":
+                state.CanDelete = isChecked;
+                break;
+            case "finalize":
+                state.CanFinalize = isChecked;
+                break;
+        }
+    }
+
+    private static bool SupportsFinalizePermission(Menu menu)
+    {
+        var page = menu.Page?.Trim().TrimStart('/').ToLowerInvariant();
+        return page is "task-management" or "requirement-list" or "project-list";
+    }
+
+    private void SaveRoleMenus()
+    {
+        var permissions = roleMenuPermissions
+            .Where(p => p.Value.CanView || p.Value.CanCreate || p.Value.CanEdit || p.Value.CanDelete || p.Value.CanFinalize)
+            .Select(p => new RoleMenuPermissionInput
+            {
+                MenuId = p.Key,
+                CanView = p.Value.CanView,
+                CanCreate = p.Value.CanCreate,
+                CanEdit = p.Value.CanEdit,
+                CanDelete = p.Value.CanDelete,
+                CanFinalize = p.Value.CanFinalize
+            })
+            .ToList();
+
+        if (ShowError(securityAdminEngine.SetRoleMenuPermissions(roleMenuRoleId, permissions, context))) return;
+        LoadRoleMenus();
+        JSRuntime.InvokeVoidAsync("alert", "Permisos guardados correctamente.");
+    }
+
+    private string GetUserLabel(long userId)
+    {
+        var u = users.FirstOrDefault(x => x.Id == userId);
+        return u == null ? userId.ToString() : $"{u.Name} {u.LastName} ({u.Email})";
+    }
+
+    private string GetRoleDescription(long roleId) =>
+        roles.FirstOrDefault(x => x.Id == roleId)?.Description ?? roleId.ToString();
+
+    private string GetMenuDescription(long? menuId)
+    {
+        if (!menuId.HasValue) return "—";
+        return menus.FirstOrDefault(x => x.Id == menuId.Value)?.Description ?? menuId.Value.ToString();
+    }
+
+    private static long? ToParent(long id) => id == 0 ? null : id;
+
+    private void CancelAll()
+    {
+        CancelRole(); CancelMenu(); CancelUserRole();
+    }
+
+    private bool ShowError(OperationResult<bool> r)
+    {
+        if (r.Success) return false;
+        JSRuntime.InvokeVoidAsync("alert", r.Message.Description);
+        return true;
+    }
+
+    #region Roles
+    private void StartCreateRole() { CancelRole(); creatingRole = true; }
+    private void StartEditRole(Role item) { CancelRole(); editingRoleId = item.Id; editRoleDescription = item.Description; }
+    private void CancelRole() { creatingRole = false; editingRoleId = 0; newRoleDescription = editRoleDescription = ""; }
+    private void CreateRole()
+    {
+        if (ShowError(securityAdminEngine.SaveRole(0, newRoleDescription, context))) return;
+        CancelRole(); LoadRoles();
+    }
+    private void UpdateRole(long id)
+    {
+        if (ShowError(securityAdminEngine.SaveRole(id, editRoleDescription, context))) return;
+        CancelRole(); LoadRoles();
+    }
+    private void DeleteRole(long id)
+    {
+        if (ShowError(securityAdminEngine.DeleteRole(id, context))) return;
+        LoadRoles();
+    }
+    #endregion
+
+    #region Menus
+    private void StartCreateMenu() { CancelMenu(); creatingMenu = true; }
+    private void StartEditMenu(Menu item)
+    {
+        CancelMenu();
+        editingMenuId = item.Id;
+        editMenuDescription = item.Description;
+        editMenuIcon = item.Icon;
+        editMenuPage = item.Page;
+        editMenuParentId = item.Parent ?? 0;
+        editMenuOrder = item.Order;
+    }
+    private void CancelMenu()
+    {
+        creatingMenu = false; editingMenuId = 0;
+        newMenuDescription = editMenuDescription = newMenuPage = editMenuPage = "";
+        newMenuIcon = editMenuIcon = newMenuOrder = editMenuOrder = 0;
+        newMenuParentId = editMenuParentId = 0;
+    }
+    private void CreateMenu()
+    {
+        if (ShowError(securityAdminEngine.SaveMenu(0, newMenuDescription, newMenuIcon, newMenuPage, ToParent(newMenuParentId), newMenuOrder, context))) return;
+        CancelMenu(); LoadMenus();
+    }
+    private void UpdateMenu(long id)
+    {
+        if (ShowError(securityAdminEngine.SaveMenu(id, editMenuDescription, editMenuIcon, editMenuPage, ToParent(editMenuParentId), editMenuOrder, context))) return;
+        CancelMenu(); LoadMenus();
+    }
+    private void DeleteMenu(long id)
+    {
+        if (ShowError(securityAdminEngine.DeleteMenu(id, context))) return;
+        LoadMenus();
+    }
+    #endregion
+
+    #region UserRoles
+    private void StartCreateUserRole() { CancelUserRole(); creatingUserRole = true; }
+    private void StartEditUserRole(UserRole item)
+    {
+        CancelUserRole();
+        editingUserRoleId = item.Id;
+        editUrUserId = item.UserId;
+        editUrRoleId = item.RoleId;
+    }
+    private void CancelUserRole()
+    {
+        creatingUserRole = false; editingUserRoleId = 0;
+        newUrUserId = editUrUserId = newUrRoleId = editUrRoleId = 0;
+    }
+    private void CreateUserRole()
+    {
+        if (ShowError(securityAdminEngine.SaveUserRole(0, newUrUserId, newUrRoleId, context))) return;
+        CancelUserRole(); LoadUserRoles();
+    }
+    private void UpdateUserRole(long id)
+    {
+        if (ShowError(securityAdminEngine.SaveUserRole(id, editUrUserId, editUrRoleId, context))) return;
+        CancelUserRole(); LoadUserRoles();
+    }
+    private void DeleteUserRole(long id)
+    {
+        if (ShowError(securityAdminEngine.DeleteUserRole(id, context))) return;
+        LoadUserRoles();
+    }
+    #endregion
+}

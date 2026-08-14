@@ -1,0 +1,40 @@
+<div class="@LayoutClass">
+    <div class="@Tw.FilteredPageMain">
+        @ChildContent
+    </div>
+    @if (Facets != null && FacetsVisible)
+    {
+        <div class="@Tw.FacetBackdrop" @onclick="CloseFacets"></div>
+        <FilterFacetsPanel ActiveCount="ActiveFilterCount"
+                           OnClose="CloseFacets"
+                           OnClear="ClearFacets"
+                           Footer="FacetFooter">
+            @Facets
+        </FilterFacetsPanel>
+    }
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Facets { get; set; }
+    [Parameter] public RenderFragment? FacetFooter { get; set; }
+    [Parameter] public bool FacetsVisible { get; set; }
+    [Parameter] public EventCallback<bool> FacetsVisibleChanged { get; set; }
+    [Parameter] public int ActiveFilterCount { get; set; }
+    [Parameter] public EventCallback OnClearFacets { get; set; }
+
+    private string LayoutClass =>
+        Facets != null && FacetsVisible ? Tw.FilteredPageLayout : Tw.FilteredPageMain;
+
+    private async System.Threading.Tasks.Task CloseFacets()
+    {
+        if (FacetsVisibleChanged.HasDelegate)
+            await FacetsVisibleChanged.InvokeAsync(false);
+    }
+
+    private async System.Threading.Tasks.Task ClearFacets()
+    {
+        if (OnClearFacets.HasDelegate)
+            await OnClearFacets.InvokeAsync();
+    }
+}

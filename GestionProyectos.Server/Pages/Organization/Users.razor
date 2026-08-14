@@ -1,0 +1,281 @@
+@page "/user-list"
+@inject IJSRuntime JSRuntime
+@inject IUserManagementEngine userManagementEngine
+@inject ISecurityAdminEngine securityAdminEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.Security
+@using GestionProyectos.Engine.Security.Admin
+@using GestionProyectos.Engine.Security.Users
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using GestionProyectos.Shared.Message
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<PageTitle>Miembros del equipo</PageTitle>
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/user-list">
+        <PageHeader Title="Miembros del equipo" Subtitle="Personal y cargos.">
+            <Actions>
+                @if (perms.CanCreate)
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="StartCreateUser" disabled="@creatingUser">
+                        <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                    </button>
+                }
+                <input type="text" class="@Tw.FilterInput" @bind-value="searchInput" placeholder="Buscar..." @bind-value:event="oninput" />
+                <TableRefreshButton OnClick="LoadUsers" />
+            </Actions>
+        </PageHeader>
+
+        <div class="@Tw.TableWrapContained">
+            <table class="@Tw.Table">
+                <colgroup>
+                    <col class="w-14" />
+                    <col class="w-28" />
+                    <col class="w-28" />
+                    <col />
+                    <col class="w-32" />
+                    <col class="w-32" />
+                    <col class="w-24" />
+                    <col class="w-28" />
+                </colgroup>
+                <thead>
+                    <tr>
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyUsersView">Id</SortableTh>
+                        <SortableTh Column="Name" State="tableState" OnSorted="ApplyUsersView" CssClass="w-28">Nombre</SortableTh>
+                        <SortableTh Column="LastName" State="tableState" OnSorted="ApplyUsersView" CssClass="w-28">Apellido</SortableTh>
+                        <SortableTh Column="Email" State="tableState" OnSorted="ApplyUsersView">Correo</SortableTh>
+                        <SortableTh Column="JobTitle" State="tableState" OnSorted="ApplyUsersView" CssClass="w-32">Cargo</SortableTh>
+                        <SortableTh Column="Role" State="tableState" OnSorted="ApplyUsersView" CssClass="w-32">Rol</SortableTh>
+                        <th class="@Tw.Th w-24">Contraseña</th>
+                        <th class="@Tw.ThActionsAuto"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (creatingUser && perms.CanCreate)
+                    {
+                        <tr>
+                            <td class="@Tw.Td text-gray-400">Nuevo</td>
+                            <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newUserName" /></td>
+                            <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newUserLastName" /></td>
+                            <td class="@Tw.TdEdit"><input type="email" class="@Tw.TableInput" @bind="newUserEmail" /></td>
+                            <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="newUserJobTitle" placeholder="Cargo" /></td>
+                            <td class="@Tw.TdEdit">
+                                <select class="@Tw.TableSelect" @bind="newUserRoleId">
+                                    <option value="0">-- Selecciona --</option>
+                                    @foreach (var r in roles) { <option value="@r.Id">@r.Description</option> }
+                                </select>
+                            </td>
+                            <td class="@Tw.TdEdit"><input type="password" class="@Tw.TableInput" @bind="newUserPassword" placeholder="Contraseña" /></td>
+                            <td class="@Tw.TdActionsAuto">
+                                <div class="@Tw.TableActions">
+                                    <button type="button" class="@Tw.TableBtn" @onclick="CreateUser">Guardar</button>
+                                    <button type="button" class="@Tw.TableBtn" @onclick="CancelUser">Cancelar</button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                    @if (displayUsers.Count == 0 && !creatingUser)
+                    {
+                        <tr><td colspan="8" class="@Tw.Td text-center text-gray-400">No hay registros</td></tr>
+                    }
+                    @foreach (var item in displayUsers)
+                    {
+                        <tr class="hover:bg-gray-50">
+                            <td class="@Tw.Td w-14">@item.Id</td>
+                            @if (editingUserId == item.Id && perms.CanEdit)
+                            {
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="editUserName" /></td>
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="editUserLastName" /></td>
+                                <td class="@Tw.TdEdit"><input type="email" class="@Tw.TableInput" @bind="editUserEmail" /></td>
+                                <td class="@Tw.TdEdit"><input type="text" class="@Tw.TableInput" @bind="editUserJobTitle" /></td>
+                                <td class="@Tw.TdEdit">
+                                    <select class="@Tw.TableSelect" @bind="editUserRoleId">
+                                        <option value="0">-- Selecciona --</option>
+                                        @foreach (var r in roles) { <option value="@r.Id">@r.Description</option> }
+                                    </select>
+                                </td>
+                                <td class="@Tw.TdEdit"><input type="password" class="@Tw.TableInput" @bind="editUserPassword" placeholder="(sin cambio)" /></td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="() => UpdateUser(item.Id)">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="CancelUser">Cancelar</button>
+                                    </div>
+                                </td>
+                            }
+                            else
+                            {
+                                <td class="@Tw.TdText" title="@item.Name">@item.Name</td>
+                                <td class="@Tw.TdText" title="@item.LastName">@item.LastName</td>
+                                <td class="@Tw.TdText" title="@item.Email">@item.Email</td>
+                                <td class="@Tw.TdText" title="@item.JobTitle">@(string.IsNullOrWhiteSpace(item.JobTitle) ? "—" : item.JobTitle)</td>
+                                <td class="@Tw.TdText" title="@GetRoleName(item.Id)">@GetRoleName(item.Id)</td>
+                                <td class="@Tw.Td text-gray-400">••••••</td>
+                                <td class="@Tw.TdActionsAuto">
+                                @if (perms.CanEdit || perms.CanDelete)
+                                {
+                                    <TableRowActionsMenu>
+                                        @if (perms.CanEdit)
+                                        {
+                                            <TableRowAction Label="Editar" OnClick="@(() => StartEditUser(item))" />
+                                        }
+                                        @if (perms.CanDelete)
+                                        {
+                                            <TableRowAction Label="Eliminar" Danger OnClick="@(() => DeleteUser(item.Id))" />
+                                        }
+                                    </TableRowActionsMenu>
+                                }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyUsersView" />
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private Context context = new();
+    private readonly PagedTableState tableState = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private string? searchText;
+
+    private List<User> users = new();
+    private List<User> displayUsers = new();
+    private List<Role> roles = new();
+    private Dictionary<long, long> userRoleIds = new();
+
+    private bool creatingUser;
+    private long editingUserId;
+
+    private string newUserName = "", newUserLastName = "", newUserEmail = "", newUserPassword = "", newUserJobTitle = "";
+    private string editUserName = "", editUserLastName = "", editUserEmail = "", editUserPassword = "", editUserJobTitle = "";
+    private long newUserRoleId, editUserRoleId;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/user-list");
+        LoadUsers();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private void ApplyUsersView()
+    {
+        IEnumerable<User> query = users;
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText;
+            query = query.Where(x => TableSearch.Matches(s,
+                x.Id.ToString(), x.Name, x.LastName, x.Email, x.JobTitle, GetRoleName(x.Id)));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Name" => tableState.SortAscending ? query.OrderBy(x => x.Name) : query.OrderByDescending(x => x.Name),
+            "LastName" => tableState.SortAscending ? query.OrderBy(x => x.LastName) : query.OrderByDescending(x => x.LastName),
+            "Email" => tableState.SortAscending ? query.OrderBy(x => x.Email) : query.OrderByDescending(x => x.Email),
+            "JobTitle" => tableState.SortAscending ? query.OrderBy(x => x.JobTitle) : query.OrderByDescending(x => x.JobTitle),
+            "Role" => tableState.SortAscending
+                ? query.OrderBy(x => GetRoleName(x.Id))
+                : query.OrderByDescending(x => GetRoleName(x.Id)),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        var list = query.ToList();
+        tableState.SetPageCount(list.Count);
+        displayUsers = tableState.Paginate(list).ToList();
+    }
+
+    private string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyUsersView();
+        }
+    }
+
+    private void LoadUsers()
+    {
+        var r = userManagementEngine.GetUsers();
+        if (!r.Success) { JSRuntime.InvokeVoidAsync("alert", r.Message.Description); return; }
+        users = r.Data ?? new();
+
+        var rolesResult = securityAdminEngine.GetRoles();
+        if (!rolesResult.Success) { JSRuntime.InvokeVoidAsync("alert", rolesResult.Message.Description); return; }
+        roles = rolesResult.Data ?? new();
+
+        var userRolesResult = securityAdminEngine.GetUserRoles();
+        if (!userRolesResult.Success) { JSRuntime.InvokeVoidAsync("alert", userRolesResult.Message.Description); return; }
+        userRoleIds = (userRolesResult.Data ?? new())
+            .GroupBy(ur => ur.UserId)
+            .ToDictionary(g => g.Key, g => g.First().RoleId);
+
+        ApplyUsersView();
+    }
+
+    private string GetRoleName(long userId)
+    {
+        if (!userRoleIds.TryGetValue(userId, out var roleId)) return "—";
+        return roles.FirstOrDefault(r => r.Id == roleId)?.Description ?? "—";
+    }
+
+    private bool ShowError(OperationResult<bool> r)
+    {
+        if (r.Success) return false;
+        JSRuntime.InvokeVoidAsync("alert", r.Message.Description);
+        return true;
+    }
+
+    private void StartCreateUser() { if (!perms.CanCreate) return; CancelUser(); creatingUser = true; }
+    private void StartEditUser(User item)
+    {
+        if (!perms.CanEdit) return;
+        CancelUser();
+        editingUserId = item.Id;
+        editUserName = item.Name;
+        editUserLastName = item.LastName;
+        editUserEmail = item.Email;
+        editUserJobTitle = item.JobTitle ?? string.Empty;
+        editUserPassword = "";
+        editUserRoleId = userRoleIds.TryGetValue(item.Id, out var roleId) ? roleId : 0;
+    }
+    private void CancelUser()
+    {
+        creatingUser = false; editingUserId = 0;
+        newUserName = newUserLastName = newUserEmail = newUserPassword = newUserJobTitle = "";
+        editUserName = editUserLastName = editUserEmail = editUserPassword = editUserJobTitle = "";
+        newUserRoleId = editUserRoleId = 0;
+    }
+    private void CreateUser()
+    {
+        if (ShowError(userManagementEngine.SaveUser(0, newUserName, newUserLastName, newUserEmail, newUserPassword, newUserJobTitle, newUserRoleId, context))) return;
+        CancelUser(); LoadUsers();
+    }
+    private void UpdateUser(long id)
+    {
+        if (ShowError(userManagementEngine.SaveUser(id, editUserName, editUserLastName, editUserEmail, editUserPassword, editUserJobTitle, editUserRoleId, context))) return;
+        CancelUser(); LoadUsers();
+    }
+    private void DeleteUser(long id)
+    {
+        if (!perms.CanDelete) return;
+        if (ShowError(userManagementEngine.DeleteUser(id, context))) return;
+        LoadUsers();
+    }
+}

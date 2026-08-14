@@ -1,0 +1,269 @@
+@page "/backlog-status-list"
+@inject IJSRuntime JSRuntime
+@inject ICatalogEngine catalogEngine
+@inject ISessionStorageService session
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/backlog-status-list">
+        <PageHeader Title="Estados de Backlog" Subtitle="Configure descripción, orden, color del badge y si el estado es de cierre.">
+            <Actions>
+                @if (perms.CanCreate)
+                {
+                    <button type="button" class="@Tw.BtnPrimary" @onclick="StartCreate" disabled="@creating">
+                        <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                    </button>
+                }
+                <input type="text" class="@Tw.FilterInput" @bind-value="searchInput" placeholder="Buscar..." @bind-value:event="oninput" />
+                <TableRefreshButton OnClick="Load" />
+            </Actions>
+        </PageHeader>
+
+        <div class="@Tw.TableWrap">
+            <table class="@Tw.Table">
+                <colgroup>
+                    <col class="w-14" />
+                    <col />
+                    <col class="w-20" />
+                    <col class="w-36" />
+                    <col class="w-24" />
+                    <col class="w-28" />
+                </colgroup>
+                <thead>
+                    <tr>
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyView">Id</SortableTh>
+                        <SortableTh Column="Description" State="tableState" OnSorted="ApplyView">Descripción</SortableTh>
+                        <SortableTh Column="Order" State="tableState" OnSorted="ApplyView" CssClass="w-20">Orden</SortableTh>
+                        <th class="@Tw.Th w-36">Color badge</th>
+                        <th class="@Tw.Th w-24">Cerrado</th>
+                        <th class="@Tw.ThActionsAuto"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (creating && perms.CanCreate)
+                    {
+                        <tr>
+                            <td class="@Tw.Td text-gray-400">Nuevo</td>
+                            <td class="@Tw.Td"><input type="text" class="@Tw.TableInput" @bind="newDescription" /></td>
+                            <td class="@Tw.Td"><input type="number" class="@Tw.TableInput w-16" @bind="newOrder" min="1" /></td>
+                            <td class="@Tw.Td">
+                                <select class="@Tw.TableSelect" @bind="newBadgeColor">
+                                    @foreach (var opt in StatusBadgeHelper.ColorOptions)
+                                    {
+                                        <option value="@opt.Key">@opt.Label</option>
+                                    }
+                                </select>
+                            </td>
+                            <td class="@Tw.Td text-center">
+                                <input type="checkbox" class="h-4 w-4 rounded border-gray-300" @bind="newIsClosed" />
+                            </td>
+                            <td class="@Tw.TdActionsAuto">
+                                <div class="@Tw.TableActions">
+                                    <button type="button" class="@Tw.TableBtn" @onclick="Create">Guardar</button>
+                                    <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                    @if (displayItems.Count == 0 && !creating)
+                    {
+                        <tr><td colspan="6" class="@Tw.Td text-center text-gray-400">No hay registros</td></tr>
+                    }
+                    @foreach (var item in displayItems)
+                    {
+                        <tr class="hover:bg-gray-50">
+                            <td class="@Tw.Td w-14">@item.Id</td>
+                            @if (editingId == item.Id)
+                            {
+                                <td class="@Tw.Td"><input type="text" class="@Tw.TableInput" @bind="editDescription" /></td>
+                                <td class="@Tw.Td"><input type="number" class="@Tw.TableInput w-16" @bind="editOrder" min="1" /></td>
+                                <td class="@Tw.Td">
+                                    <select class="@Tw.TableSelect" @bind="editBadgeColor">
+                                        @foreach (var opt in StatusBadgeHelper.ColorOptions)
+                                        {
+                                            <option value="@opt.Key">@opt.Label</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td class="@Tw.Td text-center">
+                                    <input type="checkbox" class="h-4 w-4 rounded border-gray-300" @bind="editIsClosed" />
+                                </td>
+                                <td class="@Tw.TdActionsAuto">
+                                    <div class="@Tw.TableActions">
+                                        <button type="button" class="@Tw.TableBtn" @onclick="() => Update(item.Id)">Guardar</button>
+                                        <button type="button" class="@Tw.TableBtn" @onclick="Cancel">Cancelar</button>
+                                    </div>
+                                </td>
+                            }
+                            else
+                            {
+                                <td class="@Tw.TdText" title="@item.Description">@item.Description</td>
+                                <td class="@Tw.Td w-20">@item.Order</td>
+                                <td class="@Tw.Td">
+                                    <StatusBadge Compact="true" Label="@item.Description" Color="@item.BadgeColor" />
+                                </td>
+                                <td class="@Tw.Td w-24 text-center">@(item.IsClosed ? "Sí" : "No")</td>
+                                <td class="@Tw.TdActionsAuto">
+                                    @if (perms.CanEdit || perms.CanDelete)
+                                    {
+                                        <TableRowActionsMenu>
+                                            @if (perms.CanEdit)
+                                            {
+                                                <TableRowAction Label="Editar" OnClick="@(() => StartEdit(item))" />
+                                            }
+                                            @if (perms.CanDelete)
+                                            {
+                                                <TableRowAction Label="Eliminar" Danger OnClick="@(() => Delete(item.Id))" />
+                                            }
+                                        </TableRowActionsMenu>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <TablePagination State="tableState" ItemLabel="registros" OnPageChanged="ApplyView" />
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private List<BacklogStatus> allItems = new();
+    private List<BacklogStatus> displayItems = new();
+    private readonly PagedTableState tableState = new();
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private bool creating;
+    private long editingId;
+    private string? searchText;
+
+    private string newDescription = string.Empty;
+    private int newOrder = 1;
+    private string newBadgeColor = "gray";
+    private bool newIsClosed;
+
+    private string editDescription = string.Empty;
+    private int editOrder = 1;
+    private string editBadgeColor = "gray";
+    private bool editIsClosed;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/backlog-status-list");
+        Load();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private void Load()
+    {
+        var response = catalogEngine.GetBacklogStatuses();
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        allItems = response.Data ?? new List<BacklogStatus>();
+        tableState.ResetPage();
+        ApplyView();
+    }
+
+    private void ApplyView()
+    {
+        IEnumerable<BacklogStatus> query = allItems;
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText.ToLower();
+            query = query.Where(x =>
+                x.Id.ToString().Contains(s) ||
+                x.Description.ToLower().Contains(s) ||
+                x.BadgeColor.ToLower().Contains(s));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Description" => tableState.SortAscending ? query.OrderBy(x => x.Description) : query.OrderByDescending(x => x.Description),
+            "Order" => tableState.SortAscending ? query.OrderBy(x => x.Order) : query.OrderByDescending(x => x.Order),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        var list = query.ToList();
+        tableState.SetPageCount(list.Count);
+        displayItems = tableState.Paginate(list).ToList();
+    }
+
+    private void StartCreate()
+    {
+        if (!perms.CanCreate) return;
+        Cancel();
+        creating = true;
+        newOrder = allItems.Count > 0 ? allItems.Max(x => x.Order) + 1 : 1;
+        newBadgeColor = "gray";
+        newIsClosed = false;
+    }
+
+    private void StartEdit(BacklogStatus item)
+    {
+        Cancel();
+        editingId = item.Id;
+        editDescription = item.Description;
+        editOrder = item.Order;
+        editBadgeColor = string.IsNullOrWhiteSpace(item.BadgeColor) ? "gray" : item.BadgeColor;
+        editIsClosed = item.IsClosed;
+    }
+
+    private void Cancel()
+    {
+        creating = false;
+        editingId = 0;
+        newDescription = editDescription = string.Empty;
+        newOrder = editOrder = 1;
+        newBadgeColor = editBadgeColor = "gray";
+        newIsClosed = editIsClosed = false;
+    }
+
+    private void Create()
+    {
+        var response = catalogEngine.SaveBacklogStatus(0, newDescription, newOrder, newBadgeColor, newIsClosed, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel();
+        Load();
+    }
+
+    private void Update(long id)
+    {
+        var response = catalogEngine.SaveBacklogStatus(id, editDescription, editOrder, editBadgeColor, editIsClosed, context);
+        if (!response.Success) { JSRuntime.InvokeVoidAsync("alert", response.Message.Description); return; }
+        Cancel();
+        Load();
+    }
+
+    private void Delete(long id)
+    {
+        if (!perms.CanDelete) return;
+        var response = catalogEngine.DeleteCatalog<BacklogStatus>(id, context);
+        if (!response.Success) JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+        Load();
+    }
+
+    string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+}

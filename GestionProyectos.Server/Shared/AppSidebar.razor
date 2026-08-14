@@ -1,0 +1,241 @@
+﻿@inject ISessionStorageService Session
+@inject ISecurityEngine SecurityEngine
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Engine.Security
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@implements IDisposable
+
+<nav class="@($"{SidebarClass} relative flex h-full shrink-0 flex-col border-r border-gray-200 bg-white transition-all duration-200")">
+    <button type="button"
+            class="absolute -right-3 top-3 z-20 flex h-5 w-5 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-600 shadow-sm transition hover:border-primary-300 hover:bg-primary-50 hover:text-primary-700"
+            @onclick="OnToggleCollapse"
+            title="@(Collapsed ? "Expandir menú" : "Colapsar menú")"
+            aria-label="@(Collapsed ? "Expandir menú" : "Colapsar menú")">
+        <LucideIcon Name="@(Collapsed ? "panel-right-open" : "panel-left-close")" CssClass="h-3 w-3" />
+    </button>
+
+    <div class="flex-1 overflow-y-auto overflow-x-hidden p-1.5">
+        <a href="/index"
+           class="@(IsActive("/index") ? Tw.NavLinkActive : Tw.NavLink) @(Collapsed ? "justify-center px-1.5" : "") mb-1"
+           title="Inicio">
+            <LucideIcon Name="home" CssClass="h-3.5 w-3.5 shrink-0" />
+            @if (!Collapsed)
+            {
+                <span>Inicio</span>
+            }
+        </a>
+
+        @if (groups.Count == 0)
+        {
+            @if (!Collapsed)
+            {
+                <p class="px-2 text-xs text-gray-400">Sin menú disponible</p>
+            }
+        }
+        else
+        {
+            @foreach (var group in groups)
+            {
+                <div class="mb-1">
+                    @if (Collapsed)
+                    {
+                        <button type="button"
+                                class="@($"{(IsGroupActive(group) ? Tw.NavLinkActive : Tw.NavLink)} w-full justify-center px-1.5")"
+                                title="@group.Title"
+                                @onclick="() => OnCollapsedGroupClick(group.Id)">
+                            <LucideIcon Name="@group.Icon" CssClass="h-4 w-4 shrink-0" />
+                        </button>
+                    }
+                    else
+                    {
+                        <button type="button"
+                                class="@Tw.NavGroupBtn"
+                                @onclick="() => Toggle(group.Id)">
+                            <span class="inline-flex min-w-0 items-center gap-1.5">
+                                <LucideIcon Name="@group.Icon" CssClass="h-3.5 w-3.5 shrink-0 text-primary-600" />
+                                <span class="truncate">@group.Title</span>
+                            </span>
+                            <LucideIcon Name="@(expanded.Contains(group.Id) ? "chevron-down" : "chevron-right")" CssClass="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                        </button>
+
+                        @if (expanded.Contains(group.Id))
+                        {
+                            <div class="ml-2 mt-0.5 space-y-0 border-l border-primary-100 pl-2">
+                                @foreach (var item in group.Items)
+                                {
+                                    <a href="@item.Page" class="@(IsActive(item.Page) ? Tw.NavLinkActive : Tw.NavLink)" title="@item.Description">
+                                        <LucideIcon Name="@GetItemIcon(item.Page)" CssClass="h-3.5 w-3.5 shrink-0" />
+                                        <span class="truncate">@item.Description</span>
+                                    </a>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+            }
+        }
+    </div>
+</nav>
+
+@code {
+  [Parameter] public bool Collapsed { get; set; }
+  [Parameter] public EventCallback OnToggleCollapse { get; set; }
+
+  private readonly HashSet<long> expanded = new();
+  private List<MenuGroup> groups = new();
+
+  private const long GestionGroupId = 100;
+
+  private string SidebarClass => Collapsed ? Tw.SidebarWidthCollapsed : Tw.SidebarWidth;
+
+  protected override async System.Threading.Tasks.Task OnInitializedAsync()
+  {
+    Navigation.LocationChanged += OnLocationChanged;
+    await BuildMenuAsync();
+    ExpandGroupForCurrentRoute();
+  }
+
+  private async System.Threading.Tasks.Task BuildMenuAsync()
+  {
+    groups.Clear();
+    var session = await Session!.RefreshMenusAsync(SecurityEngine);
+    if (session?.Menus == null) return;
+
+    var parents = session.Menus
+      .Where(m => string.IsNullOrWhiteSpace(m.Page))
+      .OrderBy(m => m.Oder)
+      .ToList();
+
+    foreach (var parent in parents)
+    {
+      var children = session.Menus
+        .Where(m => m.Parent == parent.Id && !string.IsNullOrWhiteSpace(m.Page) && m.CanView)
+        .OrderBy(m => m.Oder)
+        .ToList();
+
+      if (children.Count == 0) continue;
+
+      groups.Add(new MenuGroup(parent.Id, parent.Description, GetGroupIcon(parent.Description), children));
+    }
+
+    var orphans = session.Menus
+      .Where(m => !string.IsNullOrWhiteSpace(m.Page) && m.Parent == null && m.CanView)
+      .OrderBy(m => m.Oder)
+      .ToList();
+
+    if (orphans.Count > 0)
+      groups.Add(new MenuGroup(0, "General", "menu", orphans));
+  }
+
+  private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+  {
+    ExpandGroupForCurrentRoute();
+    InvokeAsync(StateHasChanged);
+  }
+
+  private void ExpandGroupForCurrentRoute()
+  {
+    var current = Navigation.ToBaseRelativePath(Navigation.Uri).TrimStart('/').ToLowerInvariant();
+    var matchingGroup = groups.FirstOrDefault(g => g.Items.Any(item => IsActive(item.Page)));
+
+    expanded.Clear();
+    if (matchingGroup != null)
+      expanded.Add(matchingGroup.Id);
+    else if ((string.IsNullOrEmpty(current) || current == "index") && groups.Any(g => g.Id == GestionGroupId))
+      expanded.Add(GestionGroupId);
+  }
+
+  public void Dispose() => Navigation.LocationChanged -= OnLocationChanged;
+
+  protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+  {
+    await JSRuntime.InvokeVoidAsync("initLucideIcons");
+  }
+
+  private async System.Threading.Tasks.Task OnCollapsedGroupClick(long groupId)
+  {
+    expanded.Clear();
+    expanded.Add(groupId);
+    if (Collapsed)
+      await OnToggleCollapse.InvokeAsync();
+  }
+
+  private void Toggle(long id)
+  {
+    if (expanded.Contains(id))
+      expanded.Remove(id);
+    else
+    {
+      expanded.Clear();
+      expanded.Add(id);
+    }
+  }
+
+  private bool IsGroupActive(MenuGroup group) =>
+    group.Items.Any(item => IsActive(item.Page));
+
+  private bool IsActive(string page)
+  {
+    var current = Navigation.ToBaseRelativePath(Navigation.Uri).TrimStart('/').ToLowerInvariant();
+    var target = page.TrimStart('/').ToLowerInvariant();
+    if (current.StartsWith("project-detail") && target == "project-list")
+      return true;
+    if (current.StartsWith("create-project") && target == "project-list")
+      return true;
+    if (current.StartsWith("create-requirement") && target == "requirement-list")
+      return true;
+    if (current.StartsWith("create-task") && target == "task-management")
+      return true;
+    if (current.StartsWith("task-management/") && target == "task-management")
+      return true;
+    if (current.StartsWith("task-detail") && target == "task-list")
+      return true;
+    if (current.StartsWith("security-") && target.StartsWith("security-"))
+      return current == target;
+    return current == target || (target != "index" && current.StartsWith(target + "/"));
+  }
+
+  private static string GetGroupIcon(string title) => title.ToLowerInvariant() switch
+  {
+    var t when t.Contains("gestión") || t.Contains("gestion") => "briefcase",
+    var t when t.Contains("organización") || t.Contains("organizacion") => "building-2",
+    var t when t.Contains("catálogo") || t.Contains("catalogo") => "library",
+    var t when t.Contains("seguridad") => "shield",
+    _ => "folder"
+  };
+
+  private static string GetItemIcon(string page) => page.ToLowerInvariant() switch
+  {
+    var p when p.Contains("project") => "folder-kanban",
+    var p when p.Contains("requirement") => "clipboard-list",
+    var p when p.Contains("task-bug-list") => "bug",
+    var p when p.Contains("backlog-status") => "tags",
+    var p when p.Contains("backlog") => "layers",
+    var p when p.Contains("performance") => "gauge",
+    var p when p.Contains("reporte-horas") => "receipt",
+    var p when p.Contains("control-registro-horas") => "calendar-check",
+    var p when p.Contains("bloqueos-externos") => "shield-alert",
+    var p when p.Contains("absence-list") => "calendar-days",
+    var p when p.Contains("task") => "list-checks",
+    var p when p.Contains("report") => "bar-chart-3",
+    var p when p.Contains("enterprise") => "building",
+    var p when p.Contains("customer") => "users",
+    var p when p.Contains("user-list") => "user-round",
+    var p when p.Contains("user-timeoff") => "calendar-days",
+    var p when p.Contains("priority") => "flag",
+    var p when p.Contains("hour-type") => "clock-3",
+    var p when p.Contains("status") => "tags",
+    var p when p.Contains("security-role-menus") => "shield-check",
+    var p when p.Contains("security-user-roles") => "user-cog",
+    var p when p.Contains("security-menus") => "menu",
+    var p when p.Contains("security-roles") => "shield",
+    var p when p.Contains("security") => "settings",
+    _ => "circle"
+  };
+
+  private record MenuGroup(long Id, string Title, string Icon, List<MenuItem> Items);
+}

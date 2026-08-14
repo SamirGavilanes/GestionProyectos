@@ -1,0 +1,88 @@
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
+
+<div class="inline-flex justify-end">
+    @if (menuOpen)
+    {
+        <button type="button" class="fixed inset-0 z-[55] cursor-default" aria-label="Cerrar menú" @onclick="Close"></button>
+    }
+    <button type="button"
+            @ref="triggerRef"
+            class="@Tw.TableActionsTrigger"
+            @onclick="Toggle"
+            aria-label="Acciones"
+            aria-expanded="@menuOpen"
+            aria-haspopup="true">
+        <LucideIcon Name="ellipsis-vertical" CssClass="h-4 w-4" />
+    </button>
+    @if (menuOpen)
+    {
+        <div @ref="dropdownRef" class="@Tw.TableActionsDropdown">
+            <CascadingValue Value="this" IsFixed="true">
+                @ChildContent
+            </CascadingValue>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private ElementReference triggerRef;
+    private ElementReference dropdownRef;
+    private DotNetObjectReference<TableRowActionsMenu>? dotNetRef;
+    private bool menuOpen;
+    private bool listenersRegistered;
+
+    public void Close()
+    {
+        if (!menuOpen) return;
+        menuOpen = false;
+        listenersRegistered = false;
+        _ = JSRuntime.InvokeVoidAsync("unregisterTableActionsMenuListeners");
+    }
+
+    private void Toggle()
+    {
+        if (menuOpen)
+        {
+            Close();
+            return;
+        }
+
+        menuOpen = true;
+    }
+
+    [JSInvokable]
+    public void CloseFromScroll()
+    {
+        _ = InvokeAsync(() =>
+        {
+            Close();
+            StateHasChanged();
+        });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+        if (!menuOpen) return;
+
+        await JSRuntime.InvokeVoidAsync("positionTableActionsMenu", triggerRef, dropdownRef);
+
+        if (!listenersRegistered)
+        {
+            dotNetRef ??= DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync("registerTableActionsMenuListeners", dotNetRef);
+            listenersRegistered = true;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (listenersRegistered)
+            await JSRuntime.InvokeVoidAsync("unregisterTableActionsMenuListeners");
+        dotNetRef?.Dispose();
+    }
+}

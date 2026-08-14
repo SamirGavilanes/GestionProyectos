@@ -1,0 +1,1189 @@
+﻿@page "/task-bug-list"
+@inject IJSRuntime JSRuntime
+@inject ITaskBugEngine taskBugEngine
+@inject ICatalogEngine catalogEngine
+@inject IUserManagementEngine userManagementEngine
+@inject IRequirementReadEngine requirementReadEngine
+@inject ICustomerReadEngine customerReadEngine
+@inject IProjectReadEngine projectReadEngine
+@inject ISessionStorageService session
+@inject NavigationManager NavigationManager
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.Security
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Feature.Customer.Read
+@using GestionProyectos.Engine.Feature.Customer.Read.Request
+@using GestionProyectos.Engine.Feature.Project.Read
+@using GestionProyectos.Engine.Feature.Project.Read.Request
+@using GestionProyectos.Engine.Feature.Requirement.Read
+@using GestionProyectos.Engine.Feature.Task.Bug
+@using GestionProyectos.Engine.Feature.Task.Bug.Request
+@using GestionProyectos.Engine.Feature.Task.Bug.Response
+@using GestionProyectos.Engine.Security.Users
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using GestionProyectos.Shared.Models.UploadFile
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/task-bug-list">
+        <PageHeader Title="Bugs" Subtitle="Reportes de QA por requerimiento. La asignación a tarea la realiza otro usuario."
+                    ShowFacetsToggle="true"
+                    FacetsVisible="showFacets"
+                    FacetsVisibleChanged="@(v => showFacets = v)"
+                    ActiveFilterCount="@GetActiveFilterCount()">
+            <Actions>
+                <ListPageToolbar ShowSearch="true"
+                                 SearchValue="@searchInput"
+                                 SearchValueChanged="@(v => searchInput = v)"
+                                 ShowViewMode="true"
+                                 ViewMode="@viewMode"
+                                 ViewModeChanged="OnViewModeChanged"
+                                 OnRefresh="LoadBugs">
+                    <LeadingContent>
+                        @if (perms.CanCreate)
+                        {
+                            <button type="button" class="@Tw.BtnPrimary" @onclick="GoToCreateBug">
+                                <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo bug
+                            </button>
+                        }
+                    </LeadingContent>
+                </ListPageToolbar>
+            </Actions>
+        </PageHeader>
+
+        <FilteredPageLayout FacetsVisible="showFacets"
+                            FacetsVisibleChanged="@(v => showFacets = v)"
+                            ActiveFilterCount="@GetActiveFilterCount()"
+                            OnClearFacets="ClearFilters">
+            <Facets>
+                <OrganizationFacetSections EnterpriseOptions="enterpriseOptions"
+                                           CustomerOptions="customerOptions"
+                                           ProjectOptions="projectOptions"
+                                           EnterpriseId="enterpriseValue"
+                                           CustomerId="customerValue"
+                                           ProjectId="projectValue"
+                                           ShowRequirements="false"
+                                           EnterpriseIdChanged="FilterEnterpriseChange"
+                                           CustomerIdChanged="FilterCustomerChange"
+                                           ProjectIdChanged="FilterProjectChange" />
+                <FacetSection Title="Estado">
+                    <FacetCheckboxList Options="statusOptions"
+                                       SelectedIds="statusIds"
+                                       SelectedIdsChanged="OnStatusFilterChanged" />
+                </FacetSection>
+                @if (!isDeveloperRole)
+                {
+                    <FacetSection Title="Desarrollador">
+                        <FacetCheckboxList Options="developerOptions"
+                                           SelectedIds="developerIds"
+                                           SelectedIdsChanged="FilterDeveloperChange" />
+                    </FacetSection>
+                }
+            </Facets>
+            <ChildContent>
+        @if (viewMode == ViewList)
+        {
+        <div class="@Tw.TableWrapContained">
+            <table class="@Tw.Table table-fixed">
+                <colgroup>
+                    <col class="w-12" />
+                    <col class="w-44" />
+                    <col />
+                    <col class="w-20" />
+                    <col class="w-28" />
+                    <col class="w-28" />
+                    <col class="w-28" />
+                    <col class="w-28" />
+                    @if (perms.CanEdit || perms.CanDelete)
+                    {
+                        <col class="w-8" />
+                    }
+                </colgroup>
+                <thead>
+                    <tr>
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyView" CssClass="text-center">Id</SortableTh>
+                        <SortableTh Column="Requirement" State="tableState" OnSorted="ApplyView">Requerimiento</SortableTh>
+                        <SortableTh Column="Description" State="tableState" OnSorted="ApplyView">Detalle del error</SortableTh>
+                        <SortableTh Column="IsWithinOriginalScope" State="tableState" OnSorted="ApplyView" CssClass="text-center whitespace-nowrap">Alcance</SortableTh>
+                        <SortableTh Column="Developer" State="tableState" OnSorted="ApplyView">Desarrollador</SortableTh>
+                        <SortableTh Column="StartDate" State="tableState" OnSorted="ApplyView" CssClass="whitespace-nowrap">Fecha inicio</SortableTh>
+                        <SortableTh Column="EndDate" State="tableState" OnSorted="ApplyView" CssClass="whitespace-nowrap">Fecha fin</SortableTh>
+                        <SortableTh Column="Status" State="tableState" OnSorted="ApplyView">Estado</SortableTh>
+                        @if (perms.CanEdit || perms.CanDelete)
+                        {
+                            <th class="@Tw.ThActionsAuto"></th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (displayBugs.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="@(perms.CanEdit || perms.CanDelete ? 9 : 8)" class="@Tw.Td text-center text-gray-400">No hay bugs registrados</td>
+                        </tr>
+                    }
+                    @foreach (var bug in displayBugs)
+                    {
+                        <tr class="align-top hover:bg-gray-50">
+                            <td class="@($"{Tw.Td} text-center tabular-nums")">@bug.Id</td>
+                            <td class="@Tw.TdText" title="@bug.RequirementDescription">
+                                <button type="button"
+                                        class="block max-w-full truncate text-left font-medium text-primary-700 hover:underline"
+                                        @onclick="() => GoToRequirement(bug.RequirementId)">
+                                    #@bug.RequirementId · @bug.RequirementDescription
+                                </button>
+                            </td>
+                            <td class="@Tw.TdText">
+                                <button type="button"
+                                        class="block max-w-full text-left text-xs leading-relaxed text-gray-800 hover:text-primary-700"
+                                        title="@bug.Description"
+                                        @onclick="() => OpenDetailPanel(bug)">
+                                    <span class="line-clamp-2">@bug.Description</span>
+                                </button>
+                            </td>
+                            <td class="@($"{Tw.Td} text-center")">
+                                <span class="@GetScopeBadgeClass(bug.IsWithinOriginalScope)">@GetScopeLabel(bug.IsWithinOriginalScope)</span>
+                            </td>
+                            <td class="@Tw.TdText">
+                                @if (string.IsNullOrWhiteSpace(bug.DeveloperName))
+                                {
+                                    <span class="text-xs text-gray-400">—</span>
+                                }
+                                else
+                                {
+                                    <div class="flex min-w-0 items-center gap-2" title="@bug.DeveloperName">
+                                        <UserAvatarBadge UserName="@bug.DeveloperName"
+                                                         AvatarDataUrl="@GetDeveloperAvatarUrl(bug.DeveloperId)" />
+                                        <span class="truncate text-xs font-medium text-gray-900">@bug.DeveloperName</span>
+                                    </div>
+                                }
+                            </td>
+                            <td class="@($"{Tw.Td} whitespace-nowrap tabular-nums text-gray-700")">
+                                @bug.StartDate.ToLocalTime().ToString("dd-MM-yyyy")
+                            </td>
+                            <td class="@($"{Tw.Td} whitespace-nowrap tabular-nums text-gray-700")">
+                                @bug.EndDate.ToLocalTime().ToString("dd-MM-yyyy")
+                            </td>
+                            <td class="@Tw.Td">
+                                <StatusBadge Compact="true" Label="@bug.Status" Color="@GetBugStatusColor(bug.Status)" />
+                            </td>
+                            @if (perms.CanEdit || perms.CanDelete)
+                            {
+                                <td class="@Tw.TdActionsAuto">
+                                    <TableRowActionsMenu>
+                                        <TableRowAction Label="Ver detalle" OnClick="@(() => OpenDetailPanel(bug))" />
+                                        @if (isAdminRole && !bug.IsAssigned)
+                                        {
+                                            <TableRowAction Label="Asignar" OnClick="@(() => OpenAssignModal(bug))" />
+                                        }
+                                        @if (perms.CanEdit)
+                                        {
+                                            <TableRowAction Label="Editar" OnClick="@(() => StartEdit(bug))" />
+                                        }
+                                        @if (perms.CanDelete)
+                                        {
+                                            <TableRowAction Label="Eliminar" Danger OnClick="@(() => DeleteBug(bug.Id))" />
+                                        }
+                                    </TableRowActionsMenu>
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <TablePagination State="tableState" ItemLabel="bugs" OnPageChanged="ApplyView" />
+        }
+        else
+        {
+            <KanbanBoard TItem="TaskBugOverviewItem"
+                         Columns="kanbanColumns"
+                         Items="filteredBugs"
+                         StatusIdSelector="b => b.TaskBugStatusId"
+                         EnableDrag="perms.CanEdit"
+                         OnMove="OnBugMoved">
+                <CardTemplate Context="bug">
+                    <button type="button"
+                            class="@($"{Tw.KanbanCardTitle} block w-full truncate text-left hover:text-primary-700")"
+                            title="@bug.Description"
+                            @onclick="() => OpenDetailPanel(bug)">
+                        #@bug.Id · @bug.Description
+                    </button>
+                    <button type="button"
+                            class="@($"{Tw.KanbanCardMeta} block w-full truncate text-left text-primary-700 hover:underline")"
+                            title="@bug.RequirementDescription"
+                            @onclick="() => GoToRequirement(bug.RequirementId)">
+                        Req. #@bug.RequirementId · @bug.RequirementDescription
+                    </button>
+                    <p class="@Tw.KanbanCardMeta">
+                        <span class="@GetScopeBadgeClass(bug.IsWithinOriginalScope)">Alcance: @GetScopeLabel(bug.IsWithinOriginalScope)</span>
+                    </p>
+                    @if (!string.IsNullOrWhiteSpace(bug.DeveloperName))
+                    {
+                        <p class="@($"{Tw.KanbanCardMeta} flex items-center gap-1.5 truncate")">
+                            <UserAvatarBadge UserName="@bug.DeveloperName"
+                                             AvatarDataUrl="@GetDeveloperAvatarUrl(bug.DeveloperId)"
+                                             SizeClass="h-4 w-4"
+                                             TextClass="text-[8px] font-bold uppercase" />
+                            @bug.DeveloperName
+                        </p>
+                    }
+                    <div class="mt-1">
+                        <StatusBadge Compact="true" Label="@bug.Status" Color="@GetBugStatusBadgeColor(bug.TaskBugStatusId)" />
+                    </div>
+                    <div class="mt-2 flex flex-wrap gap-1">
+                        <button type="button" class="@Tw.TableBtn" @onclick="() => OpenDetailPanel(bug)">Ver detalle</button>
+                        @if (isAdminRole && !bug.IsAssigned)
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => OpenAssignModal(bug)">Asignar</button>
+                        }
+                        @if (perms.CanEdit)
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => StartEdit(bug)">Editar</button>
+                        }
+                        @if (perms.CanDelete)
+                        {
+                            <button type="button" class="@Tw.TableBtn" @onclick="() => DeleteBug(bug.Id)">Eliminar</button>
+                        }
+                    </div>
+                </CardTemplate>
+            </KanbanBoard>
+        }
+
+            </ChildContent>
+        </FilteredPageLayout>
+
+        @if (showAssignModal && assigningBug != null)
+        {
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @onclick="CloseAssignModal">
+                <div class="w-full max-w-md rounded-lg border border-gray-200 bg-white p-4 shadow-lg" @onclick:stopPropagation="true">
+                    <h3 class="text-xs font-semibold text-gray-900">Asignar bug a tarea</h3>
+                    <p class="mt-1 text-xs text-gray-500">Bug #@assigningBug.Id</p>
+                    <div class="mt-3 space-y-2">
+                        <div>
+                            <label class="@Tw.Label">Proyecto</label>
+                            <p class="rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-800">
+                                @GetAssignProjectLabel(assigningBug)
+                            </p>
+                        </div>
+                        <div>
+                            <label class="@Tw.Label">Requerimiento</label>
+                            <p class="rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-800">
+                                #@assigningBug.RequirementId · @assigningBug.RequirementDescription
+                            </p>
+                        </div>
+                        <div class="relative">
+                            <label class="@Tw.Label">Tarea del requerimiento</label>
+                            <input type="text"
+                                   class="@Tw.FormInput"
+                                   placeholder="Buscar por descripción"
+                                   value="@assignTaskSearch"
+                                   @oninput="OnAssignTaskSearchInput"
+                                   @onfocus="ShowAssignTaskDropdown"
+                                   @onblur="HideAssignTaskDropdown" />
+                            @if (showAssignTaskDropdown)
+                            {
+                                var filteredTasks = GetFilteredAssignTasks().ToList();
+                                <ul class="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-md border border-gray-200 bg-white py-1 shadow-lg">
+                                    @foreach (var task in filteredTasks)
+                                    {
+                                        <li>
+                                            <button type="button"
+                                                    class="block w-full px-2.5 py-1.5 text-left text-xs text-gray-800 hover:bg-gray-100"
+                                                    @onmousedown="() => SelectAssignTask(task)"
+                                                    @onmousedown:preventDefault="true">
+                                                #@task.Id · @task.Description (@task.DeveloperName)
+                                            </button>
+                                        </li>
+                                    }
+                                    @if (filteredTasks.Count == 0)
+                                    {
+                                        <li class="px-2.5 py-1.5 text-xs text-gray-500">Sin coincidencias</li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(assignError))
+                        {
+                            <p class="text-xs text-red-600">@assignError</p>
+                        }
+                    </div>
+                    <div class="mt-4 flex gap-2">
+                        <button type="button" class="@Tw.BtnPrimary" @onclick="ConfirmAssign" disabled="@saving">Asignar</button>
+                        <button type="button" class="@Tw.BtnOutline" @onclick="CloseAssignModal">Cancelar</button>
+                    </div>
+                </div>
+            </div>
+        }
+
+        <SidePanel IsOpen="showDetailPanel"
+                   IsOpenChanged="OnDetailPanelChanged"
+                   Title="@GetDetailPanelTitle()"
+                   Subtitle="@GetDetailPanelSubtitle()"
+                   WidthClass="max-w-xl">
+            @if (detailBug != null)
+            {
+                <div class="space-y-4">
+                    <div class="flex flex-wrap gap-1.5">
+                        <StatusBadge Compact="true" Label="@detailBug.Status" Color="@GetBugStatusBadgeColor(detailBug.TaskBugStatusId)" />
+                        <span class="@GetScopeBadgeClass(detailBug.IsWithinOriginalScope)">Alcance: @GetScopeLabel(detailBug.IsWithinOriginalScope)</span>
+                        @if (detailBug.IsAssigned)
+                        {
+                            <span class="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800">Asignado a tarea #@detailBug.TaskId</span>
+                        }
+                    </div>
+
+                    <div class="@Tw.Card !p-3">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Detalle del error</p>
+                        <p class="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-gray-800">@detailBug.Description</p>
+                    </div>
+
+                    <div class="rounded-lg border border-primary-100 bg-gradient-to-br from-primary-50/80 to-white p-4">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-primary-700">Requerimiento #@detailBug.RequirementId</p>
+                        <p class="mt-1 text-xs leading-snug text-gray-900">@detailBug.RequirementDescription</p>
+                        <button type="button"
+                                class="mt-2 text-xs font-medium text-primary-700 hover:underline"
+                                @onclick="() => GoToRequirement(detailBug.RequirementId)">
+                            Ver requerimiento
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Fecha inicio</p>
+                            <p class="mt-1 text-xs font-semibold text-gray-900">@detailBug.StartDate.ToLocalTime().ToString("dd-MM-yyyy HH:mm")</p>
+                        </div>
+                        <div class="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Fecha fin</p>
+                            <p class="mt-1 text-xs font-semibold text-gray-900">@detailBug.EndDate.ToLocalTime().ToString("dd-MM-yyyy HH:mm")</p>
+                        </div>
+                        <div class="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Reportado por</p>
+                            <p class="mt-1 text-xs font-semibold text-gray-900">@(string.IsNullOrWhiteSpace(detailBug.ReportedBy) ? "—" : detailBug.ReportedBy)</p>
+                            <p class="mt-0.5 text-xs text-gray-500">@detailBug.ReportedAt.ToLocalTime().ToString("dd-MM-yyyy HH:mm")</p>
+                        </div>
+                        <div class="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Desarrollador</p>
+                            @if (string.IsNullOrWhiteSpace(detailBug.DeveloperName))
+                            {
+                                <p class="mt-1 text-xs font-semibold text-gray-900">Sin asignar</p>
+                            }
+                            else
+                            {
+                                <div class="mt-1 flex min-w-0 items-center gap-2">
+                                    <UserAvatarBadge UserName="@detailBug.DeveloperName"
+                                                     AvatarDataUrl="@GetDeveloperAvatarUrl(detailBug.DeveloperId)" />
+                                    <p class="truncate text-xs font-semibold text-gray-900">@detailBug.DeveloperName</p>
+                                </div>
+                            }
+                            @if (detailBug.IsAssigned && !string.IsNullOrWhiteSpace(detailBug.TaskDescription))
+                            {
+                                <p class="mt-0.5 line-clamp-2 text-xs text-gray-500" title="@detailBug.TaskDescription">Tarea: @detailBug.TaskDescription</p>
+                            }
+                        </div>
+                    </div>
+
+                    @if (detailBug.Attachments.Count > 0)
+                    {
+                        <div class="@Tw.Card !p-3">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Capturas adjuntas</p>
+                            <ul class="mt-2 space-y-1">
+                                @foreach (var attachment in detailBug.Attachments)
+                                {
+                                    <li>
+                                        <button type="button"
+                                                class="@Tw.TableBtn text-left text-xs"
+                                                @onclick="() => DownloadBugAttachment(attachment.Id, attachment.FileName)">
+                                            <LucideIcon Name="image" CssClass="mr-1 inline h-3.5 w-3.5 -mt-0.5" />
+                                            @attachment.FileName
+                                        </button>
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    <div class="flex flex-wrap gap-2 border-t border-gray-100 pt-4">
+                        @if (isAdminRole && !detailBug.IsAssigned)
+                        {
+                            <button type="button" class="@Tw.BtnPrimary" @onclick="() => OpenAssignFromDetail()">
+                                Asignar a tarea
+                            </button>
+                        }
+                        @if (perms.CanEdit)
+                        {
+                            <button type="button" class="@Tw.BtnOutline" @onclick="() => StartEditFromDetail()">Editar</button>
+                        }
+                    </div>
+                </div>
+            }
+        </SidePanel>
+
+        @if (editingBug != null)
+        {
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @onclick="CancelEdit">
+                <div class="w-full max-w-md rounded-lg border border-gray-200 bg-white p-4 shadow-lg" @onclick:stopPropagation="true">
+                    <h3 class="text-xs font-semibold text-gray-900">Editar bug #@editingBug.Id</h3>
+                    <div class="mt-3 space-y-2">
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="@Tw.Label">Fecha inicio</label>
+                                <p class="rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-800">
+                                    @editingBug.StartDate.ToLocalTime().ToString("dd-MM-yyyy HH:mm")
+                                </p>
+                            </div>
+                            <div>
+                                <label class="@Tw.Label">Fecha fin</label>
+                                <p class="rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-800">
+                                    @editingBug.EndDate.ToLocalTime().ToString("dd-MM-yyyy HH:mm")
+                                </p>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="@Tw.Label">Descripción</label>
+                            <textarea class="@Tw.Textarea min-h-[96px] text-xs" @bind="editBugDescription"></textarea>
+                        </div>
+                        <div>
+                            <label class="@Tw.Label">Estado</label>
+                            <select class="@Tw.Select" @bind="editBugStatusId">
+                                @foreach (var status in bugStatuses)
+                                {
+                                    <option value="@status.Id">@status.Description</option>
+                                }
+                            </select>
+                        </div>
+                        @if (editingBug.Attachments.Count > 0)
+                        {
+                            <div>
+                                <label class="@Tw.Label">Capturas adjuntas</label>
+                                <ul class="space-y-1">
+                                    @foreach (var attachment in editingBug.Attachments)
+                                    {
+                                        <li>
+                                            <button type="button"
+                                                    class="@Tw.TableBtn text-left text-xs"
+                                                    @onclick="() => DownloadBugAttachment(attachment.Id, attachment.FileName)">
+                                                @attachment.FileName
+                                            </button>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                        <div>
+                            <label class="@Tw.Label">Añadir capturas</label>
+                            <label class="@($"{Tw.BtnOutline} cursor-pointer text-xs")" title="Adjuntar capturas (máx. 512 KB c/u)">
+                                Añadir archivo
+                                <InputFile OnChange="HandleEditBugFileChanged" multiple accept="image/*" class="sr-only" />
+                            </label>
+                            @if (editBugFiles.Count > 0)
+                            {
+                                <ul class="mt-2 space-y-1 text-xs text-gray-700">
+                                    @foreach (var file in editBugFiles)
+                                    {
+                                        <li class="flex items-center gap-2">
+                                            <span class="truncate">@file.Name</span>
+                                            <button type="button" class="@Tw.TableBtn shrink-0" @onclick="() => RemoveEditBugFile(file)">Quitar</button>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </div>
+                    <div class="mt-4 flex gap-2">
+                        <button type="button" class="@Tw.BtnPrimary" @onclick="() => SaveBugEdit(editingBug)" disabled="@saving">Guardar</button>
+                        <button type="button" class="@Tw.BtnOutline" @onclick="CancelEdit">Cancelar</button>
+                    </div>
+                </div>
+            </div>
+        }
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private const string ViewList = ViewModeToggle.List;
+    private const string ViewKanban = ViewModeToggle.Kanban;
+
+    private string viewMode = ViewList;
+    private bool showFacets = false;
+    private List<KanbanColumn> kanbanColumns = new();
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+    private bool isDeveloperRole;
+    private bool isAdminRole;
+    private readonly PagedTableState tableState = new();
+    private List<TaskBugStatus> bugStatuses = new();
+    private List<Enterprise> enterprises = new();
+    private List<User> developers = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> allCustomers = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> customerList = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> projectList = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> allProjects = new();
+    private List<TaskBugOverviewItem> bugs = new();
+    private List<TaskBugOverviewItem> facetSourceBugs = new();
+    private List<TaskBugOverviewItem> displayBugs = new();
+    private List<TaskBugOverviewItem> filteredBugs = new();
+    private List<GestionProyectos.Engine.Feature.Requirement.Read.CommonObject.Requirement> requirements = new();
+    private List<TaskBugTaskOption> assignTaskOptions = new();
+    private List<FacetOption> enterpriseOptions = new();
+    private List<FacetOption> customerOptions = new();
+    private List<FacetOption> projectOptions = new();
+    private List<FacetOption> statusOptions = new();
+    private List<FacetOption> developerOptions = new();
+    private Dictionary<long, long> customerEnterpriseMap = new();
+    private Dictionary<long, long> projectCustomerMap = new();
+    private Dictionary<long, long> requirementProjectMap = new();
+
+    private HashSet<long> statusIds = new();
+    private long enterpriseValue;
+    private long customerValue;
+    private long projectValue;
+    private HashSet<long> developerIds = new();
+    private string? searchText;
+    private TaskBugOverviewItem? editingBug;
+    private string editBugDescription = string.Empty;
+    private long editBugStatusId;
+    private List<IBrowserFile> editBugFiles = new();
+    private bool saving;
+
+    private bool showAssignModal;
+    private TaskBugOverviewItem? assigningBug;
+    private long assignTaskId;
+    private string assignTaskSearch = string.Empty;
+    private bool showAssignTaskDropdown;
+    private string? assignError;
+
+    private bool showDetailPanel;
+    private TaskBugOverviewItem? detailBug;
+    private Dictionary<long, string?> developerAvatarUrls = new();
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/task-bug-list");
+        isDeveloperRole = context.Role?.Equals("Desarrollador", StringComparison.OrdinalIgnoreCase) == true;
+        isAdminRole = context.Role?.Equals("Administrador", StringComparison.OrdinalIgnoreCase) == true;
+        bugStatuses = catalogEngine.GetTaskBugStatuses().Data ?? new();
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        developers = catalogEngine.GetUsers().Data ?? new();
+        allCustomers = customerReadEngine.GetCustomers().Data?.Customers?.ToList() ?? new();
+        customerList = allCustomers.ToList();
+        customerEnterpriseMap = allCustomers.ToDictionary(
+            c => c.Id,
+            c => enterprises.FirstOrDefault(e => string.Equals(e.Description, c.Enterprise, StringComparison.OrdinalIgnoreCase))?.Id ?? 0);
+        var projectsResponse = projectReadEngine.GetProjects(new ProjectReadRequest());
+        allProjects = projectsResponse.Success ? projectsResponse.Data?.Projects?.ToList() ?? new() : new();
+        projectCustomerMap = allProjects.ToDictionary(p => p.Id, p => p.CustomerId);
+
+        kanbanColumns = bugStatuses
+            .OrderBy(s => s.Order)
+            .ThenBy(s => s.Id)
+            .Select(s => new KanbanColumn { Id = s.Id, Title = s.Description, BadgeColor = s.BadgeColor })
+            .ToList();
+
+        requirements = requirementReadEngine.GetTickets().Data?.Tickets?
+            .OrderBy(r => r.Id)
+            .ToList() ?? new();
+        requirementProjectMap = requirements.ToDictionary(r => r.Id, r => r.ProjectId);
+
+        LoadFacetSource();
+        LoadBugs();
+    }
+
+    private void LoadFacetSource()
+    {
+        var response = taskBugEngine.GetAllBugs(new TaskBugGlobalListRequest { Context = context });
+        facetSourceBugs = response.Success ? response.Data?.Bugs ?? new() : new();
+        RefreshFacetOptions();
+    }
+
+    private long GetBugProjectId(TaskBugOverviewItem bug) =>
+        requirementProjectMap.GetValueOrDefault(bug.RequirementId);
+
+    private long GetBugCustomerId(TaskBugOverviewItem bug) =>
+        projectCustomerMap.GetValueOrDefault(GetBugProjectId(bug));
+
+    private long GetBugEnterpriseId(TaskBugOverviewItem bug) =>
+        customerEnterpriseMap.GetValueOrDefault(GetBugCustomerId(bug));
+
+    private void RefreshFacetOptions()
+    {
+        var enterpriseCatalog = enterprises.Select(e => (e.Id, e.Description));
+        enterpriseOptions = enterpriseCatalog.ToFacetOptions(
+            facetSourceBugs,
+            GetBugEnterpriseId,
+            MatchesBugFacet(enterpriseId: 0),
+            enterpriseValue);
+
+        var customerCatalog = customerList.Select(c => (c.Id, GetCustomerOptionLabel(c)));
+        customerOptions = customerCatalog.ToFacetOptions(
+            facetSourceBugs,
+            GetBugCustomerId,
+            MatchesBugFacet(customerId: 0),
+            customerValue);
+
+        var projectCatalog = (projectList.Count > 0 ? projectList : allProjects).Select(p => (p.Id, p.Description));
+        projectOptions = projectCatalog.ToFacetOptions(
+            facetSourceBugs,
+            GetBugProjectId,
+            MatchesBugFacet(projectId: 0),
+            projectValue);
+
+        var statusCatalog = bugStatuses.Select(s => (s.Id, s.Description));
+        statusOptions = statusCatalog.ToFacetOptions(
+            facetSourceBugs,
+            b => b.TaskBugStatusId,
+            MatchesBugFacet(statusId: 0),
+            statusIds);
+
+        var developerCatalog = developers.Select(d => (d.Id, $"{d.Name} {d.LastName}".Trim()));
+        developerOptions = developerCatalog.ToFacetOptionsByName(
+            facetSourceBugs,
+            b => b.DeveloperName,
+            MatchesBugFacet(developerId: 0),
+            developerIds);
+    }
+
+    private bool MatchesSelectedDevelopers(TaskBugOverviewItem bug)
+    {
+        if (!FacetFilter.IsActive(developerIds, developers.Count))
+            return true;
+
+        foreach (var developerId in developerIds)
+        {
+            var developer = developers.FirstOrDefault(d => d.Id == developerId);
+            if (developer == null)
+                continue;
+
+            var developerName = $"{developer.Name} {developer.LastName}".Trim();
+            if (string.Equals(bug.DeveloperName, developerName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private Func<TaskBugOverviewItem, bool> MatchesBugFacet(
+        long enterpriseId = -1,
+        long customerId = -1,
+        long projectId = -1,
+        long statusId = -1,
+        long developerId = -1)
+    {
+        var enterpriseFilter = enterpriseId == -1 ? enterpriseValue : enterpriseId;
+        var customerFilter = customerId == -1 ? customerValue : customerId;
+        var projectFilter = projectId == -1 ? projectValue : projectId;
+
+        return bug =>
+            (enterpriseFilter == 0 || GetBugEnterpriseId(bug) == enterpriseFilter)
+            && (customerFilter == 0 || GetBugCustomerId(bug) == customerFilter)
+            && (projectFilter == 0 || GetBugProjectId(bug) == projectFilter)
+            && (statusId == 0 || FacetFilter.Matches(bug.TaskBugStatusId, statusIds, bugStatuses.Count))
+            && (developerId == 0 || MatchesSelectedDevelopers(bug));
+    }
+
+    private void LoadBugs()
+    {
+        var response = taskBugEngine.GetAllBugs(new TaskBugGlobalListRequest
+        {
+            TaskBugStatusId = FacetFilter.ToApiSingleId(statusIds),
+            EnterpriseId = enterpriseValue,
+            CustomerId = customerValue,
+            ProjectId = projectValue,
+            DeveloperId = FacetFilter.ToApiSingleId(developerIds),
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            bugs = new();
+        }
+        else
+        {
+            bugs = response.Data?.Bugs ?? new();
+        }
+
+        RefreshFacetOptions();
+        ApplyView();
+        _ = LoadDeveloperAvatarsAsync();
+    }
+
+    private async System.Threading.Tasks.Task LoadDeveloperAvatarsAsync()
+    {
+        var userIds = bugs
+            .Where(b => b.DeveloperId > 0)
+            .Select(b => b.DeveloperId)
+            .Distinct()
+            .ToList();
+
+        var changed = false;
+        foreach (var userId in userIds)
+        {
+            if (developerAvatarUrls.ContainsKey(userId))
+                continue;
+
+            var response = userManagementEngine.GetAvatar(userId, context);
+            developerAvatarUrls[userId] = response.Success
+                && response.Data is { HasAvatar: true } data
+                && data.File.Length > 0
+                ? UserDisplayHelper.ToDataUrl(data.File, data.FileName)
+                : null;
+            changed = true;
+        }
+
+        if (changed)
+            await InvokeAsync(StateHasChanged);
+    }
+
+    private string? GetDeveloperAvatarUrl(long developerId) =>
+        developerId > 0 && developerAvatarUrls.TryGetValue(developerId, out var url) ? url : null;
+
+    private void OnStatusFilterChanged(IReadOnlySet<long> ids)
+    {
+        statusIds = new HashSet<long>(ids);
+        tableState.ResetPage();
+        LoadBugs();
+    }
+
+    private void FilterEnterpriseChange(long id)
+    {
+        enterpriseValue = id;
+        customerValue = 0;
+        projectValue = 0;
+        customerList = enterpriseValue > 0
+            ? customerReadEngine.GetCustomersByEnterprise(new CustomerReadRequest { EnterpriseId = enterpriseValue }).Data?.Customers?.ToList() ?? new()
+            : allCustomers.ToList();
+        projectList = new();
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        LoadBugs();
+    }
+
+    private void FilterCustomerChange(long id)
+    {
+        customerValue = id;
+        projectValue = 0;
+        projectList = customerValue > 0
+            ? projectReadEngine.GetProjectsByCustomer(new ProjectReadRequest { CustomerId = customerValue }).Data?.Projects?.ToList() ?? new()
+            : new();
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        LoadBugs();
+    }
+
+    private void FilterProjectChange(long id)
+    {
+        projectValue = id;
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        LoadBugs();
+    }
+
+    private void FilterDeveloperChange(IReadOnlySet<long> ids)
+    {
+        developerIds = new HashSet<long>(ids);
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        LoadBugs();
+    }
+
+    private static string GetCustomerOptionLabel(GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer item) =>
+        string.IsNullOrWhiteSpace(item.Enterprise) ? item.Description : $"{item.Description} ({item.Enterprise})";
+
+    private void ApplyView()
+    {
+        IEnumerable<TaskBugOverviewItem> query = bugs;
+
+        if (FacetFilter.IsActive(statusIds, bugStatuses.Count))
+            query = query.Where(b => statusIds.Contains(b.TaskBugStatusId));
+        if (!isDeveloperRole && FacetFilter.IsActive(developerIds, developers.Count))
+            query = query.Where(MatchesSelectedDevelopers);
+
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText;
+            query = query.Where(x => TableSearch.Matches(s,
+                x.Id.ToString(),
+                x.RequirementId.ToString(),
+                x.RequirementDescription,
+                x.DeveloperName,
+                x.Status,
+                x.Description,
+                GetScopeLabel(x.IsWithinOriginalScope)));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Requirement" => tableState.SortAscending
+                ? query.OrderBy(x => x.RequirementDescription)
+                : query.OrderByDescending(x => x.RequirementDescription),
+            "IsWithinOriginalScope" => tableState.SortAscending
+                ? query.OrderBy(x => x.IsWithinOriginalScope)
+                : query.OrderByDescending(x => x.IsWithinOriginalScope),
+            "Developer" => tableState.SortAscending
+                ? query.OrderBy(x => x.DeveloperName)
+                : query.OrderByDescending(x => x.DeveloperName),
+            "Description" => tableState.SortAscending
+                ? query.OrderBy(x => x.Description)
+                : query.OrderByDescending(x => x.Description),
+            "Status" => tableState.SortAscending
+                ? query.OrderBy(x => x.Status)
+                : query.OrderByDescending(x => x.Status),
+            "StartDate" => tableState.SortAscending
+                ? query.OrderBy(x => x.StartDate)
+                : query.OrderByDescending(x => x.StartDate),
+            "EndDate" => tableState.SortAscending
+                ? query.OrderBy(x => x.EndDate)
+                : query.OrderByDescending(x => x.EndDate),
+            _ => tableState.SortAscending
+                ? query.OrderBy(x => x.Id)
+                : query.OrderByDescending(x => x.Id)
+        };
+
+        var list = query.ToList();
+        filteredBugs = list;
+        tableState.SetPageCount(list.Count);
+        displayBugs = tableState.Paginate(list).ToList();
+    }
+
+    private void OnViewModeChanged(string mode) => viewMode = mode;
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (enterpriseValue > 0) count++;
+        if (customerValue > 0) count++;
+        if (projectValue > 0) count++;
+        if (FacetFilter.IsActive(statusIds, bugStatuses.Count)) count++;
+        if (!isDeveloperRole && FacetFilter.IsActive(developerIds, developers.Count)) count++;
+        return count;
+    }
+
+    private void ClearFilters()
+    {
+        enterpriseValue = 0;
+        customerValue = 0;
+        projectValue = 0;
+        statusIds = new HashSet<long>();
+        developerIds = new HashSet<long>();
+        customerList = allCustomers.ToList();
+        projectList = new();
+        LoadFacetSource();
+        LoadBugs();
+    }
+
+    private async System.Threading.Tasks.Task OnBugMoved(KanbanMoveEventArgs<TaskBugOverviewItem> args)
+    {
+        if (!perms.CanEdit || args.Item.TaskBugStatusId == args.NewStatusId)
+            return;
+
+        var previousStatusId = args.Item.TaskBugStatusId;
+        var previousStatus = args.Item.Status;
+        var newStatus = bugStatuses.FirstOrDefault(s => s.Id == args.NewStatusId);
+
+        args.Item.TaskBugStatusId = args.NewStatusId;
+        args.Item.Status = newStatus?.Description ?? args.Item.Status;
+        StateHasChanged();
+
+        var response = taskBugEngine.SaveBug(new TaskBugSaveRequest
+        {
+            Id = args.Item.Id,
+            RequirementId = args.Item.RequirementId,
+            TaskId = args.Item.TaskId,
+            Description = args.Item.Description,
+            TaskBugStatusId = args.NewStatusId,
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            args.Item.TaskBugStatusId = previousStatusId;
+            args.Item.Status = previousStatus;
+            await JSRuntime.InvokeVoidAsync("alert", response.Message?.Description ?? "No se pudo actualizar el estado.");
+            StateHasChanged();
+            return;
+        }
+
+        LoadBugs();
+    }
+
+    private string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+
+    private void GoToRequirement(long requirementId) => NavigationManager.NavigateTo($"/create-requirement/{requirementId}");
+
+    private void OpenDetailPanel(TaskBugOverviewItem bug)
+    {
+        detailBug = bug;
+        showDetailPanel = true;
+    }
+
+    private async System.Threading.Tasks.Task OnDetailPanelChanged(bool isOpen)
+    {
+        showDetailPanel = isOpen;
+        if (!isOpen)
+            detailBug = null;
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private string GetDetailPanelTitle() => detailBug == null ? "Detalle del bug" : $"Bug #{detailBug.Id}";
+
+    private string GetDetailPanelSubtitle() =>
+        detailBug == null
+            ? string.Empty
+            : $"Req. #{detailBug.RequirementId} · {detailBug.Status}";
+
+    private void OpenAssignFromDetail()
+    {
+        if (detailBug == null) return;
+        var bug = detailBug;
+        showDetailPanel = false;
+        OpenAssignModal(bug);
+    }
+
+    private void StartEditFromDetail()
+    {
+        if (detailBug == null) return;
+        var bug = detailBug;
+        showDetailPanel = false;
+        StartEdit(bug);
+    }
+
+    private async System.Threading.Tasks.Task DownloadBugAttachment(long attachmentId, string fileName)
+    {
+        var response = taskBugEngine.DownloadAttachment(new TaskBugDownloadRequest
+        {
+            AttachmentId = attachmentId,
+            Context = context
+        });
+
+        if (!response.Success || response.Data == null)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message?.Description ?? "No se pudo descargar el archivo.");
+            return;
+        }
+
+        var base64 = Convert.ToBase64String(response.Data.File);
+        await JSRuntime.InvokeVoidAsync("descargarArchivo", fileName, base64);
+    }
+
+    private void GoToCreateBug() => NavigationManager.NavigateTo("/create-bug");
+
+    private string GetAssignProjectLabel(TaskBugOverviewItem bug)
+    {
+        var projectId = GetBugProjectId(bug);
+        if (projectId <= 0) return "—";
+        return allProjects.FirstOrDefault(p => p.Id == projectId)?.Description ?? $"Proyecto #{projectId}";
+    }
+
+    private void OpenAssignModal(TaskBugOverviewItem bug)
+    {
+        if (!isAdminRole) return;
+        assigningBug = bug;
+        assignTaskId = 0;
+        assignTaskSearch = string.Empty;
+        showAssignTaskDropdown = false;
+        assignError = null;
+        assignTaskOptions = taskBugEngine
+            .GetTasksForRequirement(bug.RequirementId, context)
+            .Data?.Tasks ?? new();
+        showAssignModal = true;
+    }
+
+    private void CloseAssignModal()
+    {
+        showAssignModal = false;
+        assigningBug = null;
+        assignTaskSearch = string.Empty;
+        showAssignTaskDropdown = false;
+        assignError = null;
+    }
+
+    private void ShowAssignTaskDropdown() => showAssignTaskDropdown = true;
+
+    private async System.Threading.Tasks.Task HideAssignTaskDropdown()
+    {
+        await System.Threading.Tasks.Task.Delay(150);
+        showAssignTaskDropdown = false;
+    }
+
+    private void OnAssignTaskSearchInput(ChangeEventArgs e)
+    {
+        assignTaskSearch = e.Value?.ToString() ?? string.Empty;
+        assignTaskId = 0;
+        showAssignTaskDropdown = true;
+    }
+
+    private IEnumerable<TaskBugTaskOption> GetFilteredAssignTasks()
+    {
+        if (string.IsNullOrWhiteSpace(assignTaskSearch))
+            return assignTaskOptions;
+
+        var term = assignTaskSearch.Trim();
+        return assignTaskOptions.Where(t =>
+            t.Id.ToString().Contains(term, StringComparison.OrdinalIgnoreCase) ||
+            t.Description.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+            t.DeveloperName.Contains(term, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void SelectAssignTask(TaskBugTaskOption task)
+    {
+        assignTaskId = task.Id;
+        assignTaskSearch = $"#{task.Id} · {task.Description} ({task.DeveloperName})";
+        showAssignTaskDropdown = false;
+    }
+
+    private async System.Threading.Tasks.Task ConfirmAssign()
+    {
+        if (!isAdminRole || assigningBug == null) return;
+        assignError = null;
+
+        if (assignTaskId <= 0)
+        {
+            assignError = "Seleccione una tarea.";
+            return;
+        }
+
+        saving = true;
+        var response = taskBugEngine.AssignBugToTask(new TaskBugAssignRequest
+        {
+            BugId = assigningBug.Id,
+            TaskId = assignTaskId,
+            Context = context
+        });
+        saving = false;
+
+        if (!response.Success)
+        {
+            assignError = response.Message?.Description ?? "No se pudo asignar el bug.";
+            return;
+        }
+
+        CloseAssignModal();
+        LoadBugs();
+    }
+
+    private void StartEdit(TaskBugOverviewItem bug)
+    {
+        editingBug = bug;
+        editBugDescription = bug.Description;
+        editBugStatusId = bug.TaskBugStatusId;
+        editBugFiles = new();
+    }
+
+    private void CancelEdit()
+    {
+        editingBug = null;
+        editBugDescription = string.Empty;
+        editBugFiles = new();
+    }
+
+    private void HandleEditBugFileChanged(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles())
+        {
+            if (file.Size <= 512000)
+                editBugFiles.Add(file);
+            else
+                JSRuntime.InvokeVoidAsync("alert", "El archivo supera 512 KB.");
+        }
+    }
+
+    private void RemoveEditBugFile(IBrowserFile file) => editBugFiles.Remove(file);
+
+    private List<FileItem> BuildEditBugFiles() =>
+        editBugFiles.Select(file => new FileItem
+        {
+            Name = file.Name,
+            File = file.OpenReadStream(maxAllowedSize: 512000)
+        }).ToList();
+
+    private async System.Threading.Tasks.Task SaveBugEdit(TaskBugOverviewItem bug)
+    {
+        if (string.IsNullOrWhiteSpace(editBugDescription))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "La descripción no puede estar vacía.");
+            return;
+        }
+
+        saving = true;
+        var response = taskBugEngine.SaveBug(new TaskBugSaveRequest
+        {
+            Id = bug.Id,
+            RequirementId = bug.RequirementId,
+            TaskId = bug.TaskId,
+            Description = editBugDescription,
+            TaskBugStatusId = editBugStatusId,
+            Files = BuildEditBugFiles(),
+            Context = context
+        });
+        saving = false;
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        CancelEdit();
+        LoadBugs();
+    }
+
+    private async System.Threading.Tasks.Task DeleteBug(long bugId)
+    {
+        if (!perms.CanDelete) return;
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", "¿Eliminar este reporte de bug?"))
+            return;
+
+        var response = taskBugEngine.DeleteBug(new TaskBugDeleteRequest
+        {
+            Id = bugId,
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        if (editingBug?.Id == bugId)
+            CancelEdit();
+        LoadBugs();
+    }
+
+    private static string GetScopeLabel(bool withinScope) => withinScope ? "Sí" : "No";
+
+    private static string GetScopeBadgeClass(bool withinScope) =>
+        StatusBadgeHelper.TableBadgeBase + "font-semibold " +
+        (withinScope ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800");
+
+    private static string GetBugStatusColor(string status) => status switch
+    {
+        var s when s.Contains("cerrado", StringComparison.OrdinalIgnoreCase) => "green",
+        var s when s.Contains("corregido", StringComparison.OrdinalIgnoreCase) => "blue",
+        var s when s.Contains("revisión", StringComparison.OrdinalIgnoreCase) => "amber",
+        _ => "red"
+    };
+
+    private string GetBugStatusBadgeColor(long statusId) =>
+        bugStatuses.FirstOrDefault(s => s.Id == statusId)?.BadgeColor ?? "gray";
+}

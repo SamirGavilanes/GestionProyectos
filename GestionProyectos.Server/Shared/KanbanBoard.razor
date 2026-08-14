@@ -1,0 +1,129 @@
+@typeparam TItem
+@using GestionProyectos.Server.Extensions
+@inject IJSRuntime JSRuntime
+
+<div class="@Tw.KanbanBoard">
+    @foreach (var column in Columns)
+    {
+        var isDragOver = dragOverColumnId == column.Id;
+        <div class="@($"{Tw.KanbanColumn} {StatusBadgeHelper.GetKanbanColumnClasses(column.BadgeColor)}{(isDragOver ? " " + Tw.KanbanColumnDragOver : "")}")"
+             @ondragenter="() => OnDragEnterColumn(column.Id)"
+             @ondragover:preventDefault="true"
+             @ondragover="() => OnDragOverColumn(column.Id)"
+             @ondragleave="() => HandleDragLeave(column.Id)"
+             @ondrop:preventDefault="true"
+             @ondrop="() => HandleDrop(column.Id)">
+            <div class="@($"{Tw.KanbanColumnHeader} {StatusBadgeHelper.GetKanbanHeaderClasses(column.BadgeColor)}")">
+                <span class="truncate">@column.Title</span>
+                <span class="@($"{Tw.KanbanCount} {StatusBadgeHelper.GetKanbanCountClasses(column.BadgeColor)}")">@GetCount(column.Id)</span>
+            </div>
+            <div class="@Tw.KanbanColumnBody">
+                @foreach (var item in GetItemsForColumn(column.Id))
+                {
+                    var isDragging = draggingItem != null && ReferenceEquals(draggingItem, item);
+                    <div class="@($"{Tw.KanbanCard}{(isDragging ? " " + Tw.KanbanCardDragging : "")}")"
+                         data-kanban-card="true">
+                        <div class="flex items-start gap-1.5">
+                            @if (EnableDrag)
+                            {
+                                <div class="@Tw.KanbanDragHandle"
+                                     draggable="true"
+                                     data-kanban-drag-handle="true"
+                                     title="Arrastrar para cambiar estado"
+                                     @ondragstart="() => HandleDragStart(item)"
+                                     @ondragend="HandleDragEnd">
+                                    <LucideIcon Name="grip-vertical" CssClass="h-4 w-4" />
+                                </div>
+                            }
+                            <div class="min-w-0 flex-1">
+                                @if (CardTemplate != null)
+                                {
+                                    @CardTemplate(item)
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public List<KanbanColumn> Columns { get; set; } = new();
+    [Parameter] public IEnumerable<TItem> Items { get; set; } = Enumerable.Empty<TItem>();
+    [Parameter] public Func<TItem, long> StatusIdSelector { get; set; } = _ => 0;
+    [Parameter] public RenderFragment<TItem>? CardTemplate { get; set; }
+    [Parameter] public EventCallback<KanbanMoveEventArgs<TItem>> OnMove { get; set; }
+    [Parameter] public bool EnableDrag { get; set; }
+
+    private TItem? draggingItem;
+    private long? dragOverColumnId;
+    private bool dropHandled;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender || EnableDrag)
+            await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    private IEnumerable<TItem> GetItemsForColumn(long statusId) =>
+        Items.Where(i => StatusIdSelector(i) == statusId);
+
+    private int GetCount(long statusId) => GetItemsForColumn(statusId).Count();
+
+    private void HandleDragStart(TItem item)
+    {
+        if (!EnableDrag) return;
+        draggingItem = item;
+        dropHandled = false;
+        StateHasChanged();
+    }
+
+    private void HandleDragEnd()
+    {
+        dragOverColumnId = null;
+        // dragend fires before drop in most browsers — defer cleanup
+        _ = InvokeAsync(async () =>
+        {
+            await Task.Delay(50);
+            if (!dropHandled)
+                draggingItem = default;
+            StateHasChanged();
+        });
+    }
+
+    private void OnDragEnterColumn(long columnId) => dragOverColumnId = columnId;
+
+    private void OnDragOverColumn(long columnId) => dragOverColumnId = columnId;
+
+    private void HandleDragLeave(long columnId)
+    {
+        if (dragOverColumnId == columnId)
+            dragOverColumnId = null;
+    }
+
+    private async Task HandleDrop(long newStatusId)
+    {
+        dropHandled = true;
+        dragOverColumnId = null;
+
+        var item = draggingItem;
+        draggingItem = default;
+        StateHasChanged();
+
+        if (item == null || !EnableDrag)
+            return;
+
+        var currentStatusId = StatusIdSelector(item);
+        if (currentStatusId == newStatusId)
+            return;
+
+        await OnMove.InvokeAsync(new KanbanMoveEventArgs<TItem>
+        {
+            Item = item,
+            NewStatusId = newStatusId,
+            PreviousStatusId = currentStatusId
+        });
+    }
+}

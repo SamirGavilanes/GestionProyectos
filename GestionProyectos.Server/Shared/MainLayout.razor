@@ -1,0 +1,97 @@
+﻿@inherits LayoutComponentBase
+@inject IJSRuntime JSRuntime
+@inject AuthenticationStateProvider authenticationProvider
+@inject NavigationManager navigationManager
+@inject ISessionStorageService session
+@inject IUserManagementEngine userManagementEngine
+@implements IDisposable
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Engine.Security.Users
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+<PageTitle>Gestión de Proyectos</PageTitle>
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <div class="@Tw.AppShell">
+            <header class="@Tw.AppHeader">
+                <div class="@Tw.AppHeaderBrand">
+                    <div class="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-white/15">
+                        <LucideIcon Name="layout-dashboard" CssClass="h-3.5 w-3.5 text-white" />
+                    </div>
+                    <p class="min-w-0 truncate text-xs font-semibold leading-none text-white">Gestión de Proyectos</p>
+                </div>
+                <div class="@($"{Tw.AppHeaderMain} justify-end")">
+                    <UserMenuDropdown UserName="@(sessionContext.User.Claims.FirstOrDefault(x => x.Type == "Name")?.Value ?? "Usuario")"
+                                      RoleName="@(sessionContext.User.Claims.FirstOrDefault(x => x.Type == "Role")?.Value ?? "—")"
+                                      AvatarDataUrl="@avatarDataUrl"
+                                      OnLogout="LogOut" />
+                </div>
+            </header>
+
+            <div class="flex min-h-0 flex-1 overflow-hidden">
+                <AppSidebar Collapsed="sidebarCollapsed" OnToggleCollapse="ToggleSidebar" />
+
+                <main class="@Tw.AppPage">
+                    @Body
+                </main>
+            </div>
+        </div>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private bool sidebarCollapsed;
+    private string? avatarDataUrl;
+    private Context sessionContext = new();
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        navigationManager.LocationChanged += OnLocationChanged;
+        await LoadAvatarAsync();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    private async void OnLocationChanged(object? sender, LocationChangedEventArgs e) =>
+        await LoadAvatarAsync();
+
+    private async System.Threading.Tasks.Task LoadAvatarAsync()
+    {
+        sessionContext = await session!.GetStorage<Context>("session") ?? new();
+        avatarDataUrl = null;
+
+        if (sessionContext.UserId <= 0)
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var response = userManagementEngine.GetAvatar(sessionContext.UserId, sessionContext);
+        if (response.Success && response.Data is { HasAvatar: true } data && data.File.Length > 0)
+            avatarDataUrl = UserDisplayHelper.ToDataUrl(data.File, data.FileName);
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async System.Threading.Tasks.Task ToggleSidebar()
+    {
+        sidebarCollapsed = !sidebarCollapsed;
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    private async System.Threading.Tasks.Task LogOut()
+    {
+        var authenticationExt = (AuthenticationExtension)authenticationProvider;
+        await authenticationExt.UpdateAuthenticationState(null);
+        navigationManager.NavigateTo("/", true);
+    }
+
+    public void Dispose() => navigationManager.LocationChanged -= OnLocationChanged;
+}

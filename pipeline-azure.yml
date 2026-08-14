@@ -1,0 +1,32 @@
+trigger: none
+
+pool:
+  vmImage: ubuntu-latest
+          
+steps:
+- script: |    
+    git clone -b $(branch_source) https://$(user_source):$(password_source)@dev.azure.com/grupomasit/Investigaci%C3%B3n%20y%20Desarrollo/_git/GestionProyectos
+  displayName: 'Descarga desde origen'
+
+- script: |
+    git clone -b $(branch_destination) https://$(user_destination):$(password_destination)@git-codecommit.us-east-2.amazonaws.com/v1/repos/gestion-de-proyectos
+  displayName: 'Descarga desde el destino'
+
+- script: |
+    rsync -v -r GestionProyectos/Fuentes/GestionProyectos/ gestion-de-proyectos/
+  displayName: 'Sincroniza las diferencias'
+
+- script: |
+    cd GestionProyectos
+    author_email="$(git log -1 --pretty=%ae)"
+    author_name="$(git log -1 --pretty=%an)"
+    commit_name="$(git log -1 --pretty=%B)"
+    cd ..
+    git config --global user.email "$author_email"
+    git config --global user.name "$author_name"
+    cd gestion-de-proyectos
+    git add .
+    git commit -m "$commit_name"
+    git status
+    git push 
+  displayName: 'Envia la información'

@@ -1,0 +1,148 @@
+@page "/requirement-analysis/{RequirementId:long}"
+@inject IJSRuntime JSRuntime
+@inject IRequirementBurndownEngine requirementBurndownEngine
+@inject IRequirementReadEngine requirementReadEngine
+@inject NavigationManager NavigationManager
+
+@using System.Globalization
+@using GestionProyectos.Engine.Feature.Project.Burndown.Response
+@using GestionProyectos.Engine.Feature.Requirement.Burndown
+@using GestionProyectos.Engine.Feature.Requirement.Read
+@using GestionProyectos.Engine.Feature.Requirement.Read.CommonObject
+@using GestionProyectos.Engine.Feature.Requirement.Read.Request
+@using GestionProyectos.Server.Extensions
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+@implements IAsyncDisposable
+
+<AuthorizeView>
+    <Authorized>
+        <PagePermissionGuard PageRoute="/requirement-list">
+        @if (loading)
+        {
+            <p class="text-xs text-gray-500">Cargando análisis...</p>
+        }
+        else if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">@errorMessage</div>
+        }
+        else if (requirement != null)
+        {
+            <PageHeader Title="@($"Análisis · {requirement.Description}")"
+                        Subtitle="@GetPageSubtitle()">
+                <Actions>
+                    <ListPageToolbar OnRefresh="LoadAsync" Refreshing="@loading">
+                        <LeadingContent>
+                            <button type="button" class="@Tw.BtnOutline" @onclick="GoToRequirement">
+                                <LucideIcon Name="arrow-left" CssClass="h-4 w-4" /> Volver al requerimiento
+                            </button>
+                            <button type="button" class="@Tw.BtnOutline" @onclick="GoToList">
+                                <LucideIcon Name="list" CssClass="h-4 w-4" /> Lista
+                            </button>
+                        </LeadingContent>
+                    </ListPageToolbar>
+                </Actions>
+            </PageHeader>
+
+            <div class="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div class="@Tw.Card">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Proyecto</p>
+                    <RecordLink Href="@AppRoutes.ProjectDetail(requirement.ProjectId)"
+                                Title="@requirement.Project"
+                                CssClass="mt-1 block text-xs font-medium text-primary-700 hover:underline">
+                        @requirement.Project
+                    </RecordLink>
+                </div>
+                <div class="@Tw.Card">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Estado</p>
+                    <p class="mt-1 text-xs font-medium text-gray-900">@requirement.RequirementStatus</p>
+                </div>
+                <div class="@Tw.Card">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Horas estimadas</p>
+                    <p class="mt-1 text-xs font-bold tabular-nums text-gray-900">
+                        @burndownTotalHours.ToString("0.##", CultureInfo.InvariantCulture) h
+                    </p>
+                </div>
+            </div>
+
+            <div class="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                <div class="mb-2">
+                    <h2 class="@Tw.CardTitle">Burndown de horas</h2>
+                    <p class="mt-0.5 text-xs text-gray-500">
+                        Horas restantes · planificación @requirement.StartDate.ToString("dd/MM/yyyy")
+                        — @(requirement.EndDate?.ToString("dd/MM/yyyy") ?? "sin fin planificado")
+                    </p>
+                </div>
+                <BurndownChart Data="burndownData" ContainerClass="h-[28rem] w-full" />
+            </div>
+        }
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [Parameter] public long RequirementId { get; set; }
+
+    private Requirement? requirement;
+    private ProjectBurndownResponse? burndownData;
+    private decimal burndownTotalHours;
+    private bool loading = true;
+    private string? errorMessage;
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync() => await LoadAsync();
+
+    protected override async System.Threading.Tasks.Task OnParametersSetAsync()
+    {
+        if (!loading && requirement?.Id != RequirementId)
+            await LoadAsync();
+    }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender) =>
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+
+    private async System.Threading.Tasks.Task LoadAsync()
+    {
+        loading = true;
+        errorMessage = null;
+
+        var ticketResponse = requirementReadEngine.GetTicket(new RequirementReadRequest { Id = RequirementId });
+        if (!ticketResponse.Success || ticketResponse.Data?.Tickets.Count == 0)
+        {
+            loading = false;
+            errorMessage = ticketResponse.Message?.Description ?? "No se encontró el requerimiento.";
+            requirement = null;
+            burndownData = null;
+            return;
+        }
+
+        requirement = ticketResponse.Data!.Tickets[0];
+
+        var burndownResponse = requirementBurndownEngine.GetBurndown(RequirementId);
+        loading = false;
+
+        if (!burndownResponse.Success)
+        {
+            errorMessage = burndownResponse.Message?.Description ?? "No se pudo cargar el burndown.";
+            burndownData = null;
+            return;
+        }
+
+        burndownData = burndownResponse.Data;
+        burndownTotalHours = burndownData?.TotalEstimatedHours ?? 0;
+    }
+
+    private string GetPageSubtitle() =>
+        requirement == null
+            ? string.Empty
+            : $"#{requirement.Id} · {requirement.Project} · {requirement.RequirementStatus}";
+
+    private void GoToRequirement() =>
+        NavigationManager.NavigateTo(AppRoutes.RequirementDetail(RequirementId));
+
+    private void GoToList() =>
+        NavigationManager.NavigateTo("/requirement-list");
+
+    public async ValueTask DisposeAsync() =>
+        await JSRuntime.InvokeVoidAsync("disposeBurndownChart");
+}

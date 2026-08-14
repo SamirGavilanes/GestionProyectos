@@ -1,0 +1,37 @@
+@inject IJSRuntime JSRuntime
+
+<div class="@Tw.TabGroup" role="group" aria-label="Vista">
+    <button type="button"
+            class="@(ViewMode == ViewModeToggle.List ? Tw.TabIconActive : Tw.TabIconInactive)"
+            title="Vista lista"
+            aria-label="Vista lista"
+            @onclick="() => SetView(ViewModeToggle.List)">
+        <LucideIcon Name="list" CssClass="h-3.5 w-3.5" />
+    </button>
+    <button type="button"
+            class="@(ViewMode == ViewModeToggle.Kanban ? Tw.TabIconActive : Tw.TabIconInactive)"
+            title="Vista kanban"
+            aria-label="Vista kanban"
+            @onclick="() => SetView(ViewModeToggle.Kanban)">
+        <LucideIcon Name="layout-grid" CssClass="h-3.5 w-3.5" />
+    </button>
+</div>
+
+@code {
+    public const string List = "list";
+    public const string Kanban = "kanban";
+
+    [Parameter] public string ViewMode { get; set; } = List;
+    [Parameter] public EventCallback<string> ViewModeChanged { get; set; }
+
+    protected override async System.Threading.Tasks.Task OnAfterRenderAsync(bool firstRender)
+    {
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+
+    private async System.Threading.Tasks.Task SetView(string mode)
+    {
+        await ViewModeChanged.InvokeAsync(mode);
+        await JSRuntime.InvokeVoidAsync("initLucideIcons");
+    }
+}

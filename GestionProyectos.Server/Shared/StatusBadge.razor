@@ -1,0 +1,10 @@
+@using GestionProyectos.Server.Extensions
+
+<span class="@(Compact ? StatusBadgeHelper.GetTableClasses(Color) : StatusBadgeHelper.GetClasses(Color))">@Label</span>
+
+@code {
+    [Parameter] public string Label { get; set; } = string.Empty;
+    [Parameter] public string? Color { get; set; }
+    [Parameter] public bool Compact { get; set; }
+}
+

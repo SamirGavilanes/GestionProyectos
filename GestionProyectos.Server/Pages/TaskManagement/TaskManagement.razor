@@ -1,0 +1,1976 @@
+﻿@page "/task-management"
+@inject IJSRuntime JSRuntime
+@inject ITaskListEngine taskListEngine
+@inject ICatalogEngine catalogEngine
+@inject ITaskDeletionEngine taksDeletionEngine
+@inject ITaskUpdateEngine taksUpdateEngine
+@inject ITimeLogRegistrationEngine timeLogRegistrationEngine
+@inject ITaskTimeLogListEngine taskTimeLogListEngine
+@inject ISessionStorageService session
+@inject ICustomerReadEngine customerReadEngine
+@inject IProjectReadEngine projectReadEngine
+
+@using Blazored.SessionStorage
+@using GestionProyectos.Data.Entities.Security
+@using GestionProyectos.Data.Entities.TaskManagement
+@using GestionProyectos.Engine.Catalog
+@using GestionProyectos.Engine.Catalog.Request
+@using GestionProyectos.Engine.Feature.Customer.Read
+@using GestionProyectos.Engine.Feature.Customer.Read.Request
+@using GestionProyectos.Engine.Feature.Project.Read
+@using GestionProyectos.Engine.Feature.Project.Read.Request
+@using GestionProyectos.Engine.Feature.Task.TaskDeletion
+@using GestionProyectos.Engine.Feature.Task.TaskDeletion.Request
+@using GestionProyectos.Engine.Feature.Task.TaskList
+@using GestionProyectos.Engine.Feature.Task.TaskList.Request
+@using GestionProyectos.Engine.Feature.Task.TaskList.Response
+@using GestionProyectos.Engine.Feature.Task.TaskUpdate
+@using GestionProyectos.Engine.Feature.Task.TaskUpdate.Request
+@using GestionProyectos.Engine.Feature.Task
+@using GestionProyectos.Engine.Feature
+@using GestionProyectos.Engine.Feature.Task.TimeLogList
+@using GestionProyectos.Engine.Feature.Task.TimeLogList.Request
+@using GestionProyectos.Engine.Feature.Task.TimeLogList.Response
+@using GestionProyectos.Engine.Feature.Task.TimeLogRegistration
+@using GestionProyectos.Engine.Feature.Task.TimeLogRegistration.Request
+@using GestionProyectos.Engine.Security.Utilities
+@using GestionProyectos.Server.Extensions
+@using GestionProyectos.Shared.Enums
+@using System.Globalization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.WebUtilities
+
+@attribute [Authorize]
+
+<AuthorizeView Context="sessionContext">
+    <Authorized>
+        <PagePermissionGuard PageRoute="/task-management">
+        <PageHeader Title="Tareas" Subtitle="Gestión de tareas y registro de horas trabajadas."
+                    ShowFacetsToggle="true"
+                    FacetsVisible="showFacets"
+                    FacetsVisibleChanged="@(v => showFacets = v)"
+                    ActiveFilterCount="@GetActiveFilterCount()">
+            <Actions>
+                <ListPageToolbar ShowSearch="true"
+                                 SearchValue="@searchInput"
+                                 SearchValueChanged="@(v => searchInput = v)"
+                                 ShowViewMode="true"
+                                 ViewMode="@viewMode"
+                                 ViewModeChanged="OnViewModeChanged"
+                                 OnRefresh="LoadTasks">
+                    <LeadingContent>
+                        @if (perms.CanCreate)
+                        {
+                            <button type="button" class="@Tw.BtnPrimary" @onclick="GoToCreate" title="Nueva tarea">
+                                <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" /> Nuevo
+                            </button>
+                            <button type="button" class="@Tw.BtnOutline" @onclick="GoToBulkImport" title="Importación masiva">
+                                <LucideIcon Name="upload" CssClass="h-3.5 w-3.5" /> Importar
+                            </button>
+                        }
+                        @if (perms.CanEdit && viewMode == ViewList)
+                        {
+                            <label class="@($"{Tw.BtnOutline} cursor-pointer")" title="Seleccionar todas las tareas filtradas">
+                                <input type="checkbox"
+                                       class="mr-1.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500/30"
+                                       checked="@IsAllFilteredSelected"
+                                       @onchange="OnSelectAllChanged" />
+                                Seleccionar todo
+                            </label>
+                        }
+                    </LeadingContent>
+                </ListPageToolbar>
+            </Actions>
+        </PageHeader>
+
+        @if (perms.CanView && !perms.CanEdit)
+        {
+            <div class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Como desarrollador puede consultar tareas y registrar horas. Solo un administrador puede editarlas.
+            </div>
+        }
+
+        <FilteredPageLayout FacetsVisible="showFacets"
+                            FacetsVisibleChanged="@(v => showFacets = v)"
+                            ActiveFilterCount="@GetActiveFilterCount()"
+                            OnClearFacets="ClearFilters">
+            <Facets>
+                <OrganizationFacetSections EnterpriseOptions="enterpriseOptions"
+                                           CustomerOptions="customerOptions"
+                                           ProjectOptions="projectOptions"
+                                           RequirementOptions="requirementOptions"
+                                           EnterpriseId="enterpriseValue"
+                                           CustomerId="customerValue"
+                                           ProjectId="projectValue"
+                                           RequirementId="requirementValue"
+                                           EnterpriseIdChanged="FilterEnterpriseChange"
+                                           CustomerIdChanged="FilterCustomerChange"
+                                           ProjectIdChanged="FilterProjectChange"
+                                           RequirementIdChanged="FilterRequirementChange" />
+                <FacetSection Title="Estado">
+                    <FacetCheckboxList Options="taskStatusOptions"
+                                       SelectedIds="taskStatusIds"
+                                       SelectedIdsChanged="FilterTaskStatusChange" />
+                </FacetSection>
+                @if (!isDeveloperRole)
+                {
+                    <FacetSection Title="Desarrollador">
+                        <FacetCheckboxList Options="developerOptions"
+                                           SelectedIds="developerIds"
+                                           SelectedIdsChanged="FilterDeveloperChange" />
+                    </FacetSection>
+                }
+                <FacetSection Title="Periodo">
+                    <FacetDatePeriod StartDate="startDate"
+                                     StartDateChanged="v => startDate = v"
+                                     EndDate="endDate"
+                                     EndDateChanged="v => endDate = v"
+                                     Preset="datePreset"
+                                     PresetChanged="v => datePreset = v"
+                                     Counts="periodCounts"
+                                     OnChanged="SearchTasks" />
+                </FacetSection>
+                <FacetSection Title="Opciones">
+                    <label class="@Tw.FacetCheckbox">
+                        <input type="checkbox"
+                               class="@Tw.FacetOptionCheckbox"
+                               checked="@onlyDelayed"
+                               @onchange="OnDelayedChange" />
+                        <span class="@Tw.FacetOptionLabel">Demoradas</span>
+                        <span class="@Tw.FacetOptionCount">(@delayedOptionCount)</span>
+                    </label>
+                    <label class="@Tw.FacetCheckbox">
+                        <input type="checkbox"
+                               class="@Tw.FacetOptionCheckbox"
+                               checked="@onlyWithBugs"
+                               @onchange="OnWithBugsChange" />
+                        <span class="@Tw.FacetOptionLabel">Con errores</span>
+                        <span class="@Tw.FacetOptionCount">(@bugsOptionCount)</span>
+                    </label>
+                    <label class="@($"{Tw.FacetCheckbox} {(isDeveloperRole ? "opacity-70" : "")}")">
+                        <input type="checkbox"
+                               class="@Tw.FacetOptionCheckbox"
+                               checked="@onlyAssignedToMe"
+                               disabled="@isDeveloperRole"
+                               @onchange="OnAssignedToMeChange" />
+                        <span class="@Tw.FacetOptionLabel">Asignadas a mí</span>
+                        <span class="@Tw.FacetOptionCount">(@assignedOptionCount)</span>
+                    </label>
+                </FacetSection>
+            </Facets>
+            <ChildContent>
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary-100 bg-primary-50/60 px-3 py-2">
+            <p class="text-xs text-gray-600">
+                Período:
+                <span class="font-medium text-gray-800">@startDate.ToString("dd/MM/yyyy") – @endDate.ToString("dd/MM/yyyy")</span>
+            </p>
+            <p class="text-xs text-gray-600">
+                Horas en período:
+                <span class="font-bold tabular-nums text-primary-800">@FormatProgressHours(totalHours) h</span>
+            </p>
+        </div>
+        @if (viewMode == ViewList)
+        {
+        <div class="@Tw.TableWrapContained">
+            <table class="@Tw.Table table-fixed">
+                <colgroup>
+                    @if (perms.CanEdit)
+                    {
+                        <col class="w-9" />
+                    }
+                    <col class="w-9" />
+                    <col class="w-[10rem]" />
+                    <col class="w-[12rem]" />
+                    @if (!isDeveloperRole)
+                    {
+                        <col class="w-[11rem]" />
+                    }
+                    <col class="w-[4rem]" />
+                    <col class="w-[4rem]" />
+                    <col class="w-[3.25rem]" />
+                    <col class="w-[4.5rem]" />
+                    <col class="w-[6.5rem]" />
+                    <col class="w-9" />
+                    <col class="w-8" />
+                </colgroup>
+                <thead>
+                    <tr>
+                        @if (perms.CanEdit)
+                        {
+                            <th class="@Tw.Th"></th>
+                        }
+                        <SortableTh Column="Id" State="tableState" OnSorted="ApplyView" CssClass="text-center">Id</SortableTh>
+                        <SortableTh Column="Project" State="tableState" OnSorted="ApplyView">Proyecto</SortableTh>
+                        <SortableTh Column="Requirement" State="tableState" OnSorted="ApplyView">Descripción tarea</SortableTh>
+                        @if (!isDeveloperRole)
+                        {
+                            <SortableTh Column="Developer" State="tableState" OnSorted="ApplyView">Desarrollador</SortableTh>
+                        }
+                        <SortableTh Column="TimeEstimationHours" State="tableState" OnSorted="ApplyView" CssClass="text-right whitespace-nowrap">H. est.</SortableTh>
+                        <SortableTh Column="TotalHoursWorked" State="tableState" OnSorted="ApplyView" CssClass="text-right whitespace-nowrap">H. real</SortableTh>
+                        <SortableTh Column="ProgressPercent" State="tableState" OnSorted="ApplyView" CssClass="text-right whitespace-nowrap">Avance</SortableTh>
+                        <SortableTh Column="IsWithinOriginalScope" State="tableState" OnSorted="ApplyView" CssClass="text-center whitespace-nowrap">Alcance</SortableTh>
+                        <SortableTh Column="DevelopmentPhase" State="tableState" OnSorted="ApplyView" CssClass="whitespace-nowrap">Fase</SortableTh>
+                        <SortableTh Column="BugCount" State="tableState" OnSorted="ApplyView" CssClass="text-center whitespace-nowrap">Bugs</SortableTh>
+                        <th class="@Tw.ThActionsAuto"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (displayTasks.Count == 0)
+                    {
+                        <tr><td colspan="@GetTaskTableColSpan()" class="@Tw.Td text-center text-gray-400">No hay tareas</td></tr>
+                    }
+
+                    @foreach (var item in displayTasks)
+                    {
+                        <tr class="hover:bg-gray-50">
+                            @if (perms.CanEdit)
+                            {
+                                <td class="@($"{Tw.Td} px-1 text-center")">
+                                    <input type="checkbox"
+                                           class="rounded border-gray-300 text-primary-600 focus:ring-primary-500/30"
+                                           checked="@selectedTaskIds.Contains(item.Id)"
+                                           @onchange="e => ToggleTaskSelection(item.Id, e)" />
+                                </td>
+                            }
+                            <td class="@($"{Tw.Td} px-1 text-center tabular-nums")">@item.Id</td>
+                            <td class="@Tw.TdText" title="@item.ProjectDescription">
+                                <RecordLink Href="@AppRoutes.ProjectDetail(item.ProjectId)" Title="@item.ProjectDescription">
+                                    @item.ProjectDescription
+                                </RecordLink>
+                            </td>
+                            <td class="@Tw.TdText">
+                                <button type="button"
+                                        class="block max-w-full truncate text-left font-medium text-primary-700 hover:underline"
+                                        title="@($"{item.TicketId} - {item.TicketDescription}")"
+                                        @onclick="() => OpenRequirementPanel(item)">
+                                    @item.TicketId - @item.TicketDescription
+                                </button>
+                                <p class="mt-0.5 truncate text-xs text-gray-500" title="@item.TaskDescription">@item.TaskDescription</p>
+                            </td>
+                            @if (!isDeveloperRole)
+                            {
+                                <td class="@Tw.TdText">
+                                    @if (string.IsNullOrWhiteSpace(item.UserName))
+                                    {
+                                        <span class="text-xs text-gray-400">Sin asignar</span>
+                                    }
+                                    else
+                                    {
+                                        <div class="flex min-w-0 items-center gap-2" title="@item.UserName">
+                                            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-100 text-xs font-bold uppercase text-primary-800">
+                                                @GetDeveloperInitials(item.UserName)
+                                            </span>
+                                            <span class="truncate text-xs font-medium text-gray-900">@item.UserName</span>
+                                        </div>
+                                    }
+                                </td>
+                            }
+                            <td class="@($"{Tw.Td} max-w-0 text-right")">
+                                <span class="block truncate tabular-nums" title="@FormatProgressHours(item.TimeEstimationHours)">@FormatProgressHours(item.TimeEstimationHours)</span>
+                            </td>
+                            <td class="@($"{Tw.Td} max-w-0 text-right")">
+                                <span class="block truncate tabular-nums" title="@FormatProgressHours(item.TotalHoursWorked)">@FormatProgressHours(item.TotalHoursWorked)</span>
+                            </td>
+                            <td class="@($"{Tw.Td} text-right tabular-nums")">@item.ProgressPercent%</td>
+                            <td class="@($"{Tw.Td} px-1 text-center")">
+                                <span class="@GetScopeBadgeClass(item.IsWithinOriginalScope)">@GetScopeLabel(item.IsWithinOriginalScope)</span>
+                            </td>
+                            <td class="@Tw.Td">
+                                <span class="@GetPhaseBadgeClass()" title="@item.DevelopmentPhase">@item.DevelopmentPhase</span>
+                            </td>
+                            <td class="@($"{Tw.Td} px-1 text-center tabular-nums")">@item.BugCount</td>
+                            <td class="@Tw.TdActionsAuto">
+                                <TableRowActionsMenu>
+                                    @if (selectedTaskIds.Contains(item.Id) && HasMultipleSelection)
+                                    {
+                                        <TableRowAction Label="Asignar en grupo" OnClick="OpenGroupAssignModal" />
+                                    }
+                                    else
+                                    {
+                                        @if (perms.CanView)
+                                        {
+                                            <TableRowAction Label="Ver progreso" OnClick="@(() => OpenProgressPanel(item))" />
+                                            <TableRowAction Label="Registrar horas" OnClick="@(() => OpenHoursPanel(item))" />
+                                        }
+                                        @if (perms.CanEdit)
+                                        {
+                                            <TableRowAction Label="Editar" OnClick="@(() => GoToEdit(item.Id))" />
+                                        }
+                                        @if (perms.CanDelete)
+                                        {
+                                            <TableRowAction Label="Eliminar" Danger OnClick="@(() => removeTask(item))" />
+                                        }
+                                    }
+                                </TableRowActionsMenu>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <TablePagination State="tableState" ItemLabel="tareas" OnPageChanged="ApplyView" />
+        }
+        else
+        {
+            <KanbanBoard TItem="TaskItem"
+                         Columns="kanbanColumns"
+                         Items="filteredTasks"
+                         StatusIdSelector="t => t.TaskStatusId"
+                         EnableDrag="perms.CanEdit"
+                         OnMove="OnTaskMoved">
+                <CardTemplate Context="item">
+                    <button type="button"
+                            class="@($"{Tw.KanbanCardTitle} w-full truncate text-left hover:text-primary-700")"
+                            title="@($"{item.TicketId} - {item.TicketDescription}")"
+                            @onclick="() => OpenRequirementPanel(item)">
+                        @item.TicketId - @item.TicketDescription
+                    </button>
+                    <p class="@Tw.KanbanCardMeta truncate" title="@item.TaskDescription">@item.TaskDescription</p>
+                    @if (!isDeveloperRole && !string.IsNullOrWhiteSpace(item.UserName))
+                    {
+                        <p class="@Tw.KanbanCardMeta flex items-center gap-1 truncate">
+                            <span class="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary-100 text-[8px] font-bold text-primary-800">
+                                @GetDeveloperInitials(item.UserName)
+                            </span>
+                            @item.UserName
+                        </p>
+                    }
+                    <p class="@Tw.KanbanCardMeta">@FormatProgressHours(item.TimeEstimationHours) h est. · @FormatProgressHours(item.TotalHoursWorked) h · @item.ProgressPercent%</p>
+                    <p class="@Tw.KanbanCardMeta">Fase: @item.DevelopmentPhase · Bugs: @item.BugCount</p>
+                    <div class="mt-2 flex justify-end gap-1.5">
+                        @if (perms.CanView)
+                        {
+                            <button type="button"
+                                    class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 hover:border-primary-300 hover:bg-gray-50 hover:text-primary-700"
+                                    title="Ver progreso"
+                                    @onclick="() => OpenProgressPanel(item)">
+                                <LucideIcon Name="activity" CssClass="h-4 w-4" />
+                            </button>
+                            <button type="button"
+                                    class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 hover:border-primary-300 hover:bg-gray-50 hover:text-primary-700"
+                                    title="Registrar horas"
+                                    @onclick="() => OpenHoursPanel(item)">
+                                <LucideIcon Name="clock" CssClass="h-4 w-4" />
+                            </button>
+                        }
+                        @if (perms.CanEdit)
+                        {
+                            <button type="button"
+                                    class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 hover:border-primary-300 hover:bg-gray-50 hover:text-primary-700"
+                                    title="Editar"
+                                    @onclick="() => GoToEdit(item.Id)">
+                                <LucideIcon Name="pencil" CssClass="h-4 w-4" />
+                            </button>
+                        }
+                        @if (perms.CanDelete)
+                        {
+                            <button type="button"
+                                    class="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
+                                    title="Eliminar"
+                                    @onclick="() => removeTask(item)">
+                                <LucideIcon Name="trash-2" CssClass="h-4 w-4" />
+                            </button>
+                        }
+                    </div>
+                </CardTemplate>
+            </KanbanBoard>
+        }
+
+            </ChildContent>
+        </FilteredPageLayout>
+
+        <SidePanel IsOpen="showHoursPanel"
+                   IsOpenChanged="OnHoursPanelChanged"
+                   Title="Registrar horas"
+                   Subtitle="@GetHoursPanelSubtitle()"
+                   WidthClass="max-w-md"
+                   Compact="true">
+            <ChildContent>
+            <div class="space-y-2.5">
+                <p class="text-xs text-gray-500">
+                    Avance actual @hoursModalCurrentProgress.ToString("0.#")%
+                </p>
+
+                <div>
+                    <label class="@Tw.Label">Fecha</label>
+                    <input type="date"
+                           class="@($"{Tw.FormDate} !h-8 text-xs")"
+                           min="@GetHoursModalMinDate().ToString("yyyy-MM-dd")"
+                           max="@GetHoursModalMaxDate().ToString("yyyy-MM-dd")"
+                           value="@hoursModalDate.ToString("yyyy-MM-dd")"
+                           @onchange="OnHoursModalDateChange" />
+                    <p class="mt-0.5 text-xs text-gray-500">Solo los últimos 3 días</p>
+                </div>
+
+                <div>
+                    <label class="@Tw.Label">Tipo de hora</label>
+                    <HourTypeRadioPicker HourTypes="hourTypes"
+                                         InputName="hoursModalHourType"
+                                         @bind-Value="hoursModalHourTypeId" />
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="rounded-md border border-gray-100 bg-gray-50/80 px-2 py-1.5 @(IsTaskProgressComplete() ? "opacity-60" : "")">
+                        <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Minutos</p>
+                        <div class="mt-1 flex items-center gap-1">
+                            <button type="button"
+                                    class="@($"{Tw.BtnOutline} !h-7 !w-7 shrink-0 !p-0")"
+                                    disabled="@(IsTaskProgressComplete() || hoursModalMinutes <= MinutesStep)"
+                                    @onclick="DecreaseMinutes">
+                                <LucideIcon Name="minus" CssClass="h-3.5 w-3.5" />
+                            </button>
+                            <input type="number"
+                                   step="@MinutesStep"
+                                   min="@MinutesStep"
+                                   disabled="@IsTaskProgressComplete()"
+                                   class="@($"{Tw.Input} !h-7 !py-0 text-center text-xs tabular-nums")"
+                                   @bind="hoursModalMinutes"
+                                   @bind:event="oninput" />
+                            <button type="button"
+                                    class="@($"{Tw.BtnOutline} !h-7 !w-7 shrink-0 !p-0")"
+                                    disabled="@IsTaskProgressComplete()"
+                                    @onclick="IncreaseMinutes">
+                                <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" />
+                            </button>
+                        </div>
+                        @if (IsTaskProgressComplete())
+                        {
+                            <p class="mt-0.5 text-xs text-gray-500">La tarea ya está al 100% de avance.</p>
+                        }
+                        else
+                        {
+                            <p class="mt-0.5 text-xs text-gray-500">@FormatHoursFromMinutes(hoursModalMinutes) h</p>
+                        }
+                    </div>
+
+                    <div class="rounded-md border border-gray-100 bg-gray-50/80 px-2 py-1.5 @(CanRegisterDayProgress() ? "" : "opacity-60")">
+                        <div class="flex items-center justify-between gap-1">
+                            <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Avance del día</p>
+                            @if (CanRegisterDayProgress())
+                            {
+                                <p class="text-xs font-semibold text-primary-700">→ @GetProjectedProgress().ToString("0.#")%</p>
+                            }
+                        </div>
+                        <div class="mt-1 flex items-center gap-1">
+                            <button type="button"
+                                    class="@($"{Tw.BtnOutline} !h-7 !w-7 shrink-0 !p-0")"
+                                    disabled="@(!CanRegisterDayProgress() || hoursModalDayProgress <= 0)"
+                                    @onclick="DecreaseProgress">
+                                <LucideIcon Name="minus" CssClass="h-3.5 w-3.5" />
+                            </button>
+                            <input type="number"
+                                   step="@ProgressStep"
+                                   min="0"
+                                   max="@GetMaxDayProgress()"
+                                   disabled="@(!CanRegisterDayProgress())"
+                                   class="@($"{Tw.Input} !h-7 !py-0 text-center text-xs tabular-nums")"
+                                   @bind="hoursModalDayProgress"
+                                   @bind:event="oninput" />
+                            <button type="button"
+                                    class="@($"{Tw.BtnOutline} !h-7 !w-7 shrink-0 !p-0")"
+                                    disabled="@(!CanRegisterDayProgress() || hoursModalDayProgress >= GetMaxDayProgress())"
+                                    @onclick="IncreaseProgress">
+                                <LucideIcon Name="plus" CssClass="h-3.5 w-3.5" />
+                            </button>
+                        </div>
+                        @if (CanRegisterDayProgress())
+                        {
+                            <p class="mt-0.5 text-xs text-gray-500">Máx. @GetMaxDayProgress().ToString("0.#")% · pasos @ProgressStep%</p>
+                        }
+                        else if (string.IsNullOrWhiteSpace(hoursPanelTask?.UserName))
+                        {
+                            <p class="mt-0.5 text-xs text-gray-500">La tarea no tiene desarrollador asignado.</p>
+                        }
+                        else
+                        {
+                            <p class="mt-0.5 text-xs text-gray-500">Solo @hoursPanelTask.UserName puede registrar avance.</p>
+                        }
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(hoursModalError))
+                {
+                    <p class="rounded bg-red-50 px-2 py-1 text-xs text-red-600">@hoursModalError</p>
+                }
+            </div>
+            </ChildContent>
+            <Footer>
+                <div class="flex justify-end gap-1.5">
+                    <button type="button" class="@($"{Tw.BtnOutline} !py-1 !px-2.5 text-xs")" @onclick="CloseHoursPanel">Cancelar</button>
+                    <button type="button" class="@($"{Tw.BtnPrimary} !py-1 !px-2.5 text-xs")" disabled="@IsTaskProgressComplete()" @onclick="SaveHours">Guardar</button>
+                </div>
+            </Footer>
+        </SidePanel>
+
+        @if (showBlockModal)
+        {
+            <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-3" @onclick="CloseBlockModal">
+                <div class="w-full max-w-md rounded-lg border border-gray-200 bg-white p-4 shadow-lg" @onclick:stopPropagation="true">
+                    <h3 class="text-xs font-semibold text-gray-900">Motivo del bloqueo</h3>
+                    <p class="mt-1 text-xs text-gray-500">@blockModalTaskLabel</p>
+                    <p class="mt-1 text-xs text-amber-700">Nuevo estado: @blockModalStatusLabel</p>
+                    <div class="mt-3">
+                        <label class="@Tw.Label">Motivo (obligatorio)</label>
+                        <textarea class="@Tw.Textarea min-h-[96px]" @bind="blockReasonInput" placeholder="Describa el motivo del bloqueo..."></textarea>
+                    </div>
+                    <div class="mt-4 flex gap-2">
+                        <button type="button" class="@Tw.BtnPrimary" @onclick="ConfirmBlockStatus">Confirmar</button>
+                        <button type="button" class="@Tw.BtnOutline" @onclick="CloseBlockModal">Cancelar</button>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @if (showGroupAssignModal)
+        {
+            <div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-3" @onclick="CloseGroupAssignModal">
+                <div class="w-full max-w-md rounded-lg border border-gray-200 bg-white p-4 shadow-lg" @onclick:stopPropagation="true">
+                    <h3 class="text-xs font-semibold text-gray-900">Asignar en grupo</h3>
+                    <p class="mt-1 text-xs text-gray-500">@selectedTaskIds.Count tareas seleccionadas</p>
+                    <div class="mt-3">
+                        <label class="@Tw.Label">Desarrollador</label>
+                        <select class="@Tw.Select" @bind="groupAssignUserId">
+                            <option value="0">-- Seleccione --</option>
+                            @foreach (var user in developers.OrderBy(GetUserDisplayName))
+                            {
+                                <option value="@user.Id">@GetUserDisplayName(user)</option>
+                            }
+                        </select>
+                        @if (!string.IsNullOrWhiteSpace(groupAssignError))
+                        {
+                            <p class="mt-1 text-xs text-red-600">@groupAssignError</p>
+                        }
+                    </div>
+                    <div class="mt-4 flex gap-2">
+                        <button type="button" class="@Tw.BtnPrimary" @onclick="ConfirmGroupAssign">Asignar</button>
+                        <button type="button" class="@Tw.BtnOutline" @onclick="CloseGroupAssignModal">Cancelar</button>
+                    </div>
+                </div>
+            </div>
+        }
+
+        <SidePanel IsOpen="showProgressPanel"
+                   IsOpenChanged="OnProgressPanelChanged"
+                   Title="Progreso"
+                   Subtitle="@GetProgressPanelSubtitle()"
+                   WidthClass="max-w-sm"
+                   Compact="true">
+            @if (progressPanelLoading)
+            {
+                <p class="text-xs text-gray-500">Cargando historial...</p>
+            }
+            else if (!string.IsNullOrWhiteSpace(progressPanelError))
+            {
+                <p class="rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">@progressPanelError</p>
+            }
+            else if (progressPanelData != null)
+            {
+                <div class="space-y-2.5">
+                    <div class="grid grid-cols-3 gap-1.5">
+                        <div class="rounded border border-gray-200 bg-gray-50/80 px-1.5 py-1.5 text-center">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Horas</p>
+                            <p class="text-xs font-bold tabular-nums leading-tight text-gray-900">@FormatProgressHours(progressPanelData.TotalHoursWorked)</p>
+                            <p class="text-xs leading-tight text-gray-500">/ @FormatProgressHours(progressPanelData.TimeEstimationHours)</p>
+                        </div>
+                        <div class="rounded border border-gray-200 bg-gray-50/80 px-1.5 py-1.5 text-center">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Avance</p>
+                            <p class="text-xs font-bold tabular-nums leading-tight text-emerald-700">@progressPanelData.CurrentProgressPercent.ToString("0.#")%</p>
+                        </div>
+                        <div class="rounded border border-gray-200 bg-gray-50/80 px-1.5 py-1.5 text-center">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Registros</p>
+                            <p class="text-xs font-bold tabular-nums leading-tight text-gray-900">@progressPanelData.Items.Count</p>
+                        </div>
+                    </div>
+
+                    @{
+                        var progressFeasibility = GetHoursFeasibility(
+                            progressPanelData.TimeEstimationHours,
+                            progressPanelData.TotalHoursWorked,
+                            (int)Math.Round(progressPanelData.CurrentProgressPercent));
+                    }
+                    <div class="rounded border px-2 py-1.5 @progressFeasibility.BorderClass">
+                        <p class="text-xs font-bold leading-snug @progressFeasibility.TitleClass">@progressFeasibility.Title</p>
+                        <p class="mt-0.5 text-xs leading-snug text-gray-600">@progressFeasibility.Detail</p>
+                    </div>
+
+                    @if (progressPanelData.Items.Count == 0)
+                    {
+                        <div class="flex flex-col items-center justify-center rounded border border-dashed border-gray-200 bg-gray-50/60 py-6 text-center">
+                            <LucideIcon Name="clock" CssClass="mb-1.5 h-6 w-6 text-gray-400" />
+                            <p class="text-xs font-medium text-gray-700">Sin horas registradas</p>
+                            @if (progressPanelTask != null && perms.CanView)
+                            {
+                                <button type="button" class="@($"{Tw.BtnPrimary} mt-2 !px-2.5 !py-1 text-xs")" @onclick="() => OpenHoursPanelFromProgressPanel(progressPanelTask)">
+                                    Registrar horas
+                                </button>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="relative ml-1 space-y-0 border-l border-primary-200 pl-4">
+                            @foreach (var entry in progressPanelData.Items)
+                            {
+                                <div class="relative pb-2 last:pb-0">
+                                    <span class="absolute -left-[1.05rem] top-1.5 h-2 w-2 rounded-full bg-primary-500 ring-2 ring-white"></span>
+                                    <div class="rounded border border-gray-100 bg-white px-2 py-1.5">
+                                        <div class="flex items-center justify-between gap-2">
+                                            <div class="min-w-0">
+                                                <p class="truncate text-xs font-medium text-gray-900">
+                                                    @entry.ExecutionDate.ToString("dd/MM/yyyy", progressPanelCulture)
+                                                    @if (!string.IsNullOrWhiteSpace(entry.UserName))
+                                                    {
+                                                        <span class="font-normal text-gray-500"> · @entry.UserName</span>
+                                                    }
+                                                </p>
+                                            </div>
+                                            <span class="shrink-0 text-xs font-bold tabular-nums text-emerald-700">
+                                                @entry.ProgressPercent.ToString("0.#")%
+                                            </span>
+                                        </div>
+                                        <div class="mt-1 flex flex-wrap items-center gap-1 text-xs">
+                                            @if (!string.IsNullOrWhiteSpace(entry.HourTypeName))
+                                            {
+                                                <StatusBadge Label="@entry.HourTypeName" Color="@entry.HourTypeBadgeColor" />
+                                            }
+                                            <span class="inline-flex items-center gap-0.5 rounded bg-primary-50 px-1.5 py-0.5 font-semibold tabular-nums text-primary-900">
+                                                @FormatProgressHours(entry.UsedHours) h
+                                            </span>
+                                            @if (entry.ProgressDelta > 0)
+                                            {
+                                                <span class="inline-flex items-center rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-800">
+                                                    +@entry.ProgressDelta.ToString("0.#")%
+                                                </span>
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </SidePanel>
+
+        <SidePanel IsOpen="showDescriptionPanel"
+                   IsOpenChanged="OnDescriptionPanelChanged"
+                   Title="Resumen de tarea"
+                   Subtitle="@GetRequirementPanelSubtitle()"
+                   WidthClass="max-w-xl">
+            @if (descriptionPanelTask != null)
+            {
+                <div class="space-y-4">
+                    <div class="rounded-lg border border-primary-100 bg-gradient-to-br from-primary-50/80 to-white p-4">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-primary-700">Requerimiento #@descriptionPanelTask.TicketId</p>
+                        <h3 class="mt-1 text-xs font-semibold leading-snug text-gray-900">@descriptionPanelTask.TicketDescription</h3>
+                        <p class="mt-2 text-xs text-gray-500" title="@descriptionPanelTask.ProjectDescription">
+                            <RecordLink Href="@AppRoutes.ProjectDetail(descriptionPanelTask.ProjectId)"
+                                          Title="@descriptionPanelTask.ProjectDescription"
+                                          CssClass="inline-flex items-center hover:text-primary-700 hover:underline">
+                                <LucideIcon Name="folder-kanban" CssClass="mr-1 inline h-3.5 w-3.5 -mt-0.5" />
+                                @descriptionPanelTask.ProjectDescription
+                            </RecordLink>
+                        </p>
+                    </div>
+
+                    <div class="flex flex-wrap gap-1.5">
+                        <span class="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800">@descriptionPanelTask.TaskStatus</span>
+                        <span class="@GetPhaseBadgeClass()">@descriptionPanelTask.DevelopmentPhase</span>
+                        <span class="@GetScopeBadgeClass(descriptionPanelTask.IsWithinOriginalScope)">Alcance: @GetScopeLabel(descriptionPanelTask.IsWithinOriginalScope)</span>
+                        @if (descriptionPanelTask.BugCount > 0)
+                        {
+                            <span class="inline-flex rounded-full bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-800">@descriptionPanelTask.BugCount bug@(descriptionPanelTask.BugCount == 1 ? "" : "s")</span>
+                        }
+                    </div>
+
+                    <div class="@Tw.Card !p-3">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Descripción de la tarea</p>
+                        <p class="mt-2 text-xs leading-relaxed text-gray-800">@descriptionPanelTask.TaskDescription</p>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Horas</p>
+                            <p class="mt-1 text-xs font-bold tabular-nums text-gray-900">@FormatProgressHours(descriptionPanelTask.TotalHoursWorked)</p>
+                            <p class="text-xs text-gray-500">de @FormatProgressHours(descriptionPanelTask.TimeEstimationHours) h estimadas</p>
+                            @if (descriptionPanelTask.TimeEstimationHours > 0)
+                            {
+                                <p class="mt-0.5 text-xs tabular-nums text-gray-500">@GetPanelRemainingHoursLabel(descriptionPanelTask)</p>
+                            }
+                            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100">
+                                <div class="h-full rounded-full bg-primary-500 transition-all"
+                                     style="width: @(GetPanelHoursProgressPercent(descriptionPanelTask))%"></div>
+                            </div>
+                        </div>
+                        <div class="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Avance</p>
+                            <p class="mt-1 text-xs font-bold tabular-nums text-gray-900">@descriptionPanelTask.ProgressPercent%</p>
+                            <p class="text-xs text-gray-500">@GetPanelProgressHint(descriptionPanelTask)</p>
+                            @if (descriptionPanelTask.ProgressPercent < 100)
+                            {
+                                <p class="mt-0.5 text-xs tabular-nums text-gray-500">Falta @(100 - descriptionPanelTask.ProgressPercent)%</p>
+                            }
+                            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100">
+                                <div class="h-full rounded-full bg-emerald-500 transition-all"
+                                     style="width: @(Math.Min(100, descriptionPanelTask.ProgressPercent))%"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    @{
+                        var hoursFeasibility = GetHoursFeasibility(
+                            descriptionPanelTask.TimeEstimationHours,
+                            descriptionPanelTask.TotalHoursWorked,
+                            descriptionPanelTask.ProgressPercent);
+                    }
+                    <div class="rounded-lg border p-3 shadow-sm @hoursFeasibility.BorderClass">
+                        <div class="flex items-start gap-2.5">
+                            <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md @hoursFeasibility.IconBgClass">
+                                <LucideIcon Name="@hoursFeasibility.IconName" CssClass="@($"h-3.5 w-3.5 {hoursFeasibility.IconClass}")" />
+                            </div>
+                            <div class="min-w-0">
+                                <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">¿Alcanzan las horas?</p>
+                                <p class="mt-1 text-xs font-bold leading-snug @hoursFeasibility.TitleClass">@hoursFeasibility.Title</p>
+                                <p class="mt-1 text-xs leading-relaxed text-gray-600">@hoursFeasibility.Detail</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    @if (!isDeveloperRole)
+                    {
+                        <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-3">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Desarrollador asignado</p>
+                            @if (string.IsNullOrWhiteSpace(descriptionPanelTask.UserName))
+                            {
+                                <p class="mt-2 text-xs text-gray-500">Sin asignar</p>
+                            }
+                            else
+                            {
+                                <div class="mt-2 flex items-center gap-3">
+                                    <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-100 text-xs font-bold uppercase text-primary-800">
+                                        @GetDeveloperInitials(descriptionPanelTask.UserName)
+                                    </span>
+                                    <div class="min-w-0">
+                                        <p class="truncate text-xs font-semibold text-gray-900">@descriptionPanelTask.UserName</p>
+                                        <p class="text-xs text-gray-500">Responsable de la tarea</p>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <div class="flex flex-wrap gap-2 border-t border-gray-100 pt-4">
+                        <button type="button" class="@Tw.BtnPrimary" @onclick="GoToTaskDetailFromPanel">
+                            <LucideIcon Name="external-link" CssClass="h-3.5 w-3.5" /> Ver detalle completo
+                        </button>
+                        @if (perms.CanView)
+                        {
+                            <button type="button" class="@Tw.BtnOutline" @onclick="() => OpenProgressPanelFromDescriptionPanel(descriptionPanelTask)">
+                                <LucideIcon Name="activity" CssClass="h-3.5 w-3.5" /> Ver progreso
+                            </button>
+                            <button type="button" class="@Tw.BtnOutline" @onclick="() => OpenHoursPanelFromDescriptionPanel(descriptionPanelTask)">
+                                <LucideIcon Name="clock" CssClass="h-3.5 w-3.5" /> Registrar horas
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+        </SidePanel>
+        </PagePermissionGuard>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private const string ViewList = "list";
+    private const string ViewKanban = "kanban";
+
+    private string viewMode = ViewList;
+    private bool showFacets = false;
+    private List<KanbanColumn> kanbanColumns = new();
+    private readonly PagedTableState tableState = new() { SortColumn = "Id" };
+
+    [Inject] NavigationManager NavigationManager { get; set; } = default!;
+
+    private string? searchText;
+    private DateTime startDate;
+    private DateTime endDate = DateTime.Today;
+    private DatePeriodPreset datePreset = DatePeriodHelper.DefaultPreset;
+    private IReadOnlyDictionary<DatePeriodPreset, int> periodCounts = new Dictionary<DatePeriodPreset, int>();
+    private int delayedOptionCount;
+    private int bugsOptionCount;
+    private int assignedOptionCount;
+    private const int MinutesStep = 10;
+    private const int ProgressStep = 5;
+    private decimal totalHours;
+    private int hoursModalMinutes = MinutesStep;
+    private decimal hoursModalDayProgress;
+    private decimal hoursModalCurrentProgress;
+    private long hoursModalTaskId;
+    private long hoursModalHourTypeId;
+    private long enterpriseValue;
+    private long customerValue;
+    private long projectValue;
+    private long requirementValue;
+    private HashSet<long> taskStatusIds = new();
+    private HashSet<long> developerIds = new();
+    private bool onlyAssignedToMe;
+    private bool onlyDelayed;
+    private bool onlyWithBugs;
+    private bool showHoursPanel;
+    private bool showBlockModal;
+    private bool showGroupAssignModal;
+    private long groupAssignUserId;
+    private string? groupAssignError;
+    private HashSet<long> selectedTaskIds = new();
+    private bool showDescriptionPanel;
+    private bool showProgressPanel;
+    private bool progressPanelLoading;
+    private TaskItem? descriptionPanelTask;
+    private TaskItem? progressPanelTask;
+    private TaskItem? hoursPanelTask;
+    private TaskTimeLogListResponse? progressPanelData;
+    private string? progressPanelError;
+    private bool isDeveloperRole;
+    private string? hoursModalError;
+    private DateTime hoursModalDate = DateTime.Today;
+    private static readonly CultureInfo hoursModalCulture = new("es-ES");
+    private static readonly CultureInfo progressPanelCulture = new("es-ES");
+    private string blockReasonInput = string.Empty;
+    private string blockModalTaskLabel = string.Empty;
+    private string blockModalStatusLabel = string.Empty;
+    private TaskItem? pendingBlockTask;
+    private long pendingBlockStatusId;
+    private Context context = new();
+    private PagePermissions perms = PagePermissions.Full;
+
+    private List<TaskItem> allTasks = new();
+    private List<TaskItem> facetSourceTasks = new();
+    private List<TaskItem> displayTasks = new();
+    private List<TaskItem> filteredTasks = new();
+    private List<Enterprise> enterprises = new();
+    private List<User> developers = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> allCustomers = new();
+    private List<GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer> customerList = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> projectList = new();
+    private List<GestionProyectos.Engine.Feature.Project.Read.CommonObject.Project> allProjects = new();
+    private List<Requirement> requirementList = new();
+    private List<Requirement> allRequirements = new();
+    private List<GestionProyectos.Data.Entities.TaskManagement.TaskStatus> taskStatuses = new();
+    private List<HourType> hourTypes = new();
+    private List<FacetOption> enterpriseOptions = new();
+    private List<FacetOption> customerOptions = new();
+    private List<FacetOption> projectOptions = new();
+    private List<FacetOption> requirementOptions = new();
+    private List<FacetOption> taskStatusOptions = new();
+    private List<FacetOption> developerOptions = new();
+    private Dictionary<long, long> customerEnterpriseMap = new();
+    private Dictionary<long, long> projectCustomerMap = new();
+
+    protected override async System.Threading.Tasks.Task OnInitializedAsync()
+    {
+        context = await session!.GetStorage<Context>("session") ?? new();
+        perms = PermissionHelper.Resolve(context, "/task-management");
+        isDeveloperRole = context.Role?.Equals("Desarrollador", StringComparison.OrdinalIgnoreCase) == true;
+
+        enterprises = catalogEngine.GetEnterprises().Data ?? new();
+        developers = catalogEngine.GetUsers().Data ?? new();
+        taskStatuses = catalogEngine.GetTaskStatuses().Data ?? new();
+        hourTypes = catalogEngine.GetCatalog<HourType>().Data ?? new();
+        kanbanColumns = taskStatuses
+            .Select(s => new KanbanColumn { Id = s.Id, Title = s.Description, BadgeColor = s.BadgeColor }).ToList();
+
+        allCustomers = customerReadEngine.GetCustomers().Data?.Customers?.ToList() ?? new();
+        customerList = allCustomers.ToList();
+        customerEnterpriseMap = allCustomers.ToDictionary(
+            c => c.Id,
+            c => enterprises.FirstOrDefault(e => string.Equals(e.Description, c.Enterprise, StringComparison.OrdinalIgnoreCase))?.Id ?? 0);
+        var projectsResponse = projectReadEngine.GetProjects(new ProjectReadRequest());
+        allProjects = projectsResponse.Success ? projectsResponse.Data?.Projects?.ToList() ?? new() : new();
+        projectCustomerMap = allProjects.ToDictionary(p => p.Id, p => p.CustomerId);
+        allRequirements = catalogEngine.GetTickets().Data?.OrderByDescending(r => r.Id).ToList() ?? new();
+
+        DatePeriodHelper.ApplyPreset(datePreset, out startDate, out endDate);
+
+        var uri = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        var query = QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("start", out var startVal) && DateTime.TryParse(startVal, out var start))
+            startDate = start.Date;
+        if (query.TryGetValue("end", out var endVal) && DateTime.TryParse(endVal, out var end))
+            endDate = end.Date;
+        datePreset = DatePeriodHelper.DetectPreset(startDate, endDate);
+        if (query.TryGetValue("enterpriseId", out var entVal) && long.TryParse(entVal, out var ent) && ent > 0)
+        {
+            enterpriseValue = ent;
+            customerList = customerReadEngine.GetCustomersByEnterprise(new CustomerReadRequest { EnterpriseId = enterpriseValue }).Data?.Customers?.ToList() ?? new();
+        }
+        if (query.TryGetValue("customerId", out var custVal) && long.TryParse(custVal, out var cust) && cust > 0)
+        {
+            customerValue = cust;
+            projectList = projectReadEngine.GetProjectsByCustomer(new ProjectReadRequest { CustomerId = customerValue }).Data?.Projects ?? new();
+        }
+        if (query.TryGetValue("projectId", out var projVal) && long.TryParse(projVal, out var proj))
+            projectValue = proj;
+        if (projectValue > 0)
+            requirementList = catalogEngine.GetTickets(new GetTicketRequest { ProjectId = projectValue }).Data ?? new();
+        if (query.TryGetValue("requirementId", out var reqVal) && long.TryParse(reqVal, out var req))
+            requirementValue = req;
+        if (query.TryGetValue("taskStatusId", out var statusVal) && long.TryParse(statusVal, out var status) && status > 0)
+            taskStatusIds = new HashSet<long> { status };
+        if (!isDeveloperRole && query.TryGetValue("developerId", out var devVal) && long.TryParse(devVal, out var dev) && dev > 0)
+            developerIds = new HashSet<long> { dev };
+
+        LoadTasks();
+    }
+
+    private static string GetCustomerOptionLabel(GestionProyectos.Engine.Feature.Customer.Read.CommonObject.Customer customer) =>
+        string.IsNullOrWhiteSpace(customer.Enterprise)
+            ? customer.Description
+            : $"{customer.Description} · {customer.Enterprise}";
+
+    private void SearchTasks()
+    {
+        tableState.ResetPage();
+        LoadTasks();
+    }
+
+    private void LoadTasks()
+    {
+        var response = taskListEngine.Execute(new TaskListRequest
+        {
+            StartDate = startDate,
+            EndDate = endDate,
+            Context = context,
+            EnterpriseId = enterpriseValue,
+            CustomerId = customerValue,
+            ProjectId = projectValue,
+            RequirementId = requirementValue,
+            TaskStatusId = FacetFilter.ToApiSingleId(taskStatusIds),
+            DeveloperId = FacetFilter.ToApiSingleId(developerIds),
+            OnlyAssignedToMe = onlyAssignedToMe,
+            OnlyDelayed = onlyDelayed,
+            OnlyWithBugs = onlyWithBugs
+        });
+
+        if (!response.Success)
+        {
+            JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+            return;
+        }
+
+        allTasks = response.Data?.Tasks ?? new();
+        LoadFacetSource();
+        RefreshFacetOptions();
+        ApplyView();
+    }
+
+    private void LoadFacetSource()
+    {
+        var response = taskListEngine.Execute(new TaskListRequest
+        {
+            StartDate = startDate,
+            EndDate = endDate,
+            Context = context
+        });
+        facetSourceTasks = response.Success ? response.Data?.Tasks ?? new() : new();
+    }
+
+    private long GetTaskEnterpriseId(TaskItem task) =>
+        customerEnterpriseMap.GetValueOrDefault(projectCustomerMap.GetValueOrDefault(task.ProjectId));
+
+    private void RefreshFacetOptions()
+    {
+        var enterpriseCatalog = enterprises.Select(e => (e.Id, e.Description));
+        enterpriseOptions = enterpriseCatalog.ToFacetOptions(
+            facetSourceTasks,
+            GetTaskEnterpriseId,
+            MatchesTaskFacet(enterpriseId: 0),
+            enterpriseValue);
+
+        var customerCatalog = customerList.Select(c => (c.Id, GetCustomerOptionLabel(c)));
+        customerOptions = customerCatalog.ToFacetOptions(
+            facetSourceTasks,
+            t => projectCustomerMap.GetValueOrDefault(t.ProjectId),
+            MatchesTaskFacet(customerId: 0),
+            customerValue);
+
+        var projectCatalog = (projectList.Count > 0 ? projectList : allProjects).Select(p => (p.Id, p.Description));
+        projectOptions = projectCatalog.ToFacetOptions(
+            facetSourceTasks,
+            t => t.ProjectId,
+            MatchesTaskFacet(projectId: 0),
+            projectValue);
+
+        var requirementCatalog = GetRequirementsForFacet().Select(r => (r.Id, $"#{r.Id} · {r.Description}"));
+        requirementOptions = requirementCatalog.ToFacetOptions(
+            facetSourceTasks,
+            t => t.TicketId,
+            MatchesTaskFacet(requirementId: 0),
+            requirementValue);
+
+        var statusCatalog = taskStatuses.Select(s => (s.Id, s.Description));
+        taskStatusOptions = statusCatalog.ToFacetOptions(
+            facetSourceTasks,
+            t => t.TaskStatusId,
+            MatchesTaskFacet(taskStatusId: 0),
+            taskStatusIds);
+
+        var developerCatalog = developers.Select(d => (d.Id, $"{d.Name} {d.LastName}".Trim()));
+        developerOptions = developerCatalog.ToFacetOptions(
+            facetSourceTasks,
+            t => t.UserId,
+            MatchesTaskFacet(developerId: 0),
+            developerIds);
+
+        var facetTasks = facetSourceTasks.Where(MatchesTaskFacet()).ToList();
+        delayedOptionCount = facetTasks.Count(IsDelayedTask);
+        bugsOptionCount = facetTasks.Count(t => t.BugCount > 0);
+        assignedOptionCount = facetTasks.Count(t => t.UserId == context.UserId);
+
+        periodCounts = DatePeriodHelper.CountByPresets(
+            (rangeStart, rangeEnd) => facetTasks.Count(t =>
+                t.LastExecutionDate.HasValue
+                && DatePeriodHelper.IsDateInRange(t.LastExecutionDate.Value, rangeStart, rangeEnd)),
+            startDate,
+            endDate);
+    }
+
+    private IEnumerable<Requirement> GetRequirementsForFacet()
+    {
+        if (projectValue > 0)
+            return requirementList.Count > 0
+                ? requirementList
+                : allRequirements.Where(r => r.ProjectId == projectValue);
+
+        var projectIds = (projectList.Count > 0 ? projectList : allProjects)
+            .Where(p => customerValue == 0 || p.CustomerId == customerValue)
+            .Where(p => enterpriseValue == 0 || customerList.Any(c => c.Id == p.CustomerId))
+            .Select(p => p.Id)
+            .ToHashSet();
+
+        return allRequirements.Where(r => projectIds.Contains(r.ProjectId));
+    }
+
+    private bool IsDelayedTask(TaskItem task) =>
+        task.TotalHoursWorked > task.TimeEstimationHours
+        && !FinalizeStatusHelper.IsTaskFinalized(task.TaskStatus);
+
+    private Func<TaskItem, bool> MatchesTaskFacet(
+        long enterpriseId = -1,
+        long customerId = -1,
+        long projectId = -1,
+        long requirementId = -1,
+        long taskStatusId = -1,
+        long developerId = -1)
+    {
+        var enterpriseFilter = enterpriseId == -1 ? enterpriseValue : enterpriseId;
+        var customerFilter = customerId == -1 ? customerValue : customerId;
+        var projectFilter = projectId == -1 ? projectValue : projectId;
+        var requirementFilter = requirementId == -1 ? requirementValue : requirementId;
+
+        return task =>
+            (enterpriseFilter == 0 || GetTaskEnterpriseId(task) == enterpriseFilter)
+            && (customerFilter == 0 || projectCustomerMap.GetValueOrDefault(task.ProjectId) == customerFilter)
+            && (projectFilter == 0 || task.ProjectId == projectFilter)
+            && (requirementFilter == 0 || task.TicketId == requirementFilter)
+            && (taskStatusId == 0 || FacetFilter.Matches(task.TaskStatusId, taskStatusIds, taskStatuses.Count))
+            && (developerId == 0 || FacetFilter.Matches(task.UserId, developerIds, developers.Count));
+    }
+
+    private void ApplyView()
+    {
+        IEnumerable<TaskItem> query = allTasks;
+
+        if (FacetFilter.IsActive(taskStatusIds, taskStatuses.Count))
+            query = query.Where(t => taskStatusIds.Contains(t.TaskStatusId));
+        if (!isDeveloperRole && FacetFilter.IsActive(developerIds, developers.Count))
+            query = query.Where(t => developerIds.Contains(t.UserId));
+
+        if (!string.IsNullOrWhiteSpace(tableState.SearchText))
+        {
+            var s = tableState.SearchText.ToLower();
+            query = query.Where(d => TableSearch.Matches(s,
+                d.Id.ToString(), d.TicketId.ToString(), d.ProjectDescription, d.TicketDescription, d.TaskDescription,
+                d.UserName, d.TaskStatus, d.DevelopmentPhase, FormatProgressHours(d.TimeEstimationHours),
+                FormatProgressHours(d.TotalHoursWorked), d.ProgressPercent.ToString(), d.BugCount.ToString(),
+                GetScopeLabel(d.IsWithinOriginalScope)));
+        }
+
+        query = tableState.SortColumn switch
+        {
+            "Project" => tableState.SortAscending
+                ? query.OrderBy(x => x.ProjectDescription).ThenBy(x => x.TicketDescription)
+                : query.OrderByDescending(x => x.ProjectDescription).ThenByDescending(x => x.TicketDescription),
+            "Requirement" => tableState.SortAscending
+                ? query.OrderBy(x => x.TicketId).ThenBy(x => x.TicketDescription)
+                : query.OrderByDescending(x => x.TicketId).ThenByDescending(x => x.TicketDescription),
+            "Developer" => tableState.SortAscending
+                ? query.OrderBy(x => x.UserName)
+                : query.OrderByDescending(x => x.UserName),
+            "TimeEstimationHours" => tableState.SortAscending ? query.OrderBy(x => x.TimeEstimationHours) : query.OrderByDescending(x => x.TimeEstimationHours),
+            "TotalHoursWorked" => tableState.SortAscending ? query.OrderBy(x => x.TotalHoursWorked) : query.OrderByDescending(x => x.TotalHoursWorked),
+            "ProgressPercent" => tableState.SortAscending ? query.OrderBy(x => x.ProgressPercent) : query.OrderByDescending(x => x.ProgressPercent),
+            "IsWithinOriginalScope" => tableState.SortAscending ? query.OrderBy(x => x.IsWithinOriginalScope) : query.OrderByDescending(x => x.IsWithinOriginalScope),
+            "DevelopmentPhase" => tableState.SortAscending ? query.OrderBy(x => x.DevelopmentPhase) : query.OrderByDescending(x => x.DevelopmentPhase),
+            "BugCount" => tableState.SortAscending ? query.OrderBy(x => x.BugCount) : query.OrderByDescending(x => x.BugCount),
+            _ => tableState.SortAscending ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id)
+        };
+
+        filteredTasks = query.ToList();
+        tableState.SetPageCount(filteredTasks.Count);
+        displayTasks = tableState.Paginate(filteredTasks).ToList();
+        totalHours = filteredTasks.Sum(x => x.HoursWorkedInPeriod);
+        selectedTaskIds.RemoveWhere(id => filteredTasks.All(t => t.Id != id));
+    }
+
+    private int GetTaskTableColSpan() => (isDeveloperRole ? 10 : 11) + (perms.CanEdit ? 1 : 0);
+
+    private bool IsAllFilteredSelected =>
+        filteredTasks.Count > 0 && filteredTasks.All(t => selectedTaskIds.Contains(t.Id));
+
+    private bool HasMultipleSelection => selectedTaskIds.Count > 1;
+
+    private void OnSelectAllChanged(ChangeEventArgs e)
+    {
+        if (e.Value is bool selectAll && selectAll)
+        {
+            foreach (var task in filteredTasks)
+                selectedTaskIds.Add(task.Id);
+        }
+        else
+        {
+            selectedTaskIds.Clear();
+        }
+    }
+
+    private void ToggleTaskSelection(long taskId, ChangeEventArgs e)
+    {
+        if (e.Value is bool selected && selected)
+            selectedTaskIds.Add(taskId);
+        else
+            selectedTaskIds.Remove(taskId);
+    }
+
+    private void OpenGroupAssignModal()
+    {
+        if (!HasMultipleSelection) return;
+        groupAssignUserId = 0;
+        groupAssignError = null;
+        showGroupAssignModal = true;
+    }
+
+    private void CloseGroupAssignModal()
+    {
+        showGroupAssignModal = false;
+        groupAssignUserId = 0;
+        groupAssignError = null;
+    }
+
+    private async System.Threading.Tasks.Task ConfirmGroupAssign()
+    {
+        if (!HasMultipleSelection) return;
+
+        if (groupAssignUserId <= 0)
+        {
+            groupAssignError = "Seleccione un desarrollador.";
+            return;
+        }
+
+        var tasksToAssign = filteredTasks.Where(t => selectedTaskIds.Contains(t.Id)).ToList();
+        var failed = 0;
+        string? lastError = null;
+
+        foreach (var item in tasksToAssign)
+        {
+            var response = taksUpdateEngine.Execute(new TaskUpdateRequest
+            {
+                Id = item.Id,
+                TicketId = item.TicketId,
+                Description = item.TaskDescription,
+                TimeEstimationHours = item.TimeEstimationHours,
+                TaskStatusId = item.TaskStatusId,
+                IsWithinOriginalScope = item.IsWithinOriginalScope,
+                ScopeChangeReason = item.ScopeChangeReason,
+                DevelopmentPhaseId = item.DevelopmentPhaseId,
+                UserId = groupAssignUserId,
+                Context = context
+            });
+
+            if (!response.Success)
+            {
+                failed++;
+                lastError = response.Message?.Description;
+            }
+        }
+
+        CloseGroupAssignModal();
+        selectedTaskIds.Clear();
+        LoadTasks();
+
+        if (failed > 0)
+        {
+            var assigned = tasksToAssign.Count - failed;
+            var message = assigned > 0
+                ? $"Se asignaron {assigned} tarea(s), pero {failed} no se pudieron actualizar. {lastError}"
+                : lastError ?? "No se pudieron asignar las tareas.";
+            await JSRuntime.InvokeVoidAsync("alert", message);
+        }
+    }
+
+    private static string GetUserDisplayName(User user) =>
+        $"{user.Name} {user.LastName}".Trim();
+
+    private async System.Threading.Tasks.Task OnTaskMoved(KanbanMoveEventArgs<TaskItem> args)
+    {
+        if (!perms.CanEdit || args.Item.TaskStatusId == args.NewStatusId) return;
+
+        if (IsFinalizedStatus(args.NewStatusId) && !perms.CanFinalize)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "No tiene permiso para finalizar tareas.");
+            return;
+        }
+
+        if (IsBlockStatus(args.NewStatusId))
+        {
+            pendingBlockTask = args.Item;
+            pendingBlockStatusId = args.NewStatusId;
+            blockModalTaskLabel = args.Item.TaskDescription;
+            blockModalStatusLabel = kanbanColumns.FirstOrDefault(c => c.Id == args.NewStatusId)?.Title ?? "Bloqueo";
+            blockReasonInput = string.Empty;
+            showBlockModal = true;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        await ApplyStatusChange(args.Item, args.NewStatusId, null);
+    }
+
+    private async System.Threading.Tasks.Task ConfirmBlockStatus()
+    {
+        if (pendingBlockTask == null) return;
+        if (string.IsNullOrWhiteSpace(blockReasonInput))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "Indique el motivo del bloqueo.");
+            return;
+        }
+
+        await ApplyStatusChange(pendingBlockTask, pendingBlockStatusId, blockReasonInput.Trim());
+        CloseBlockModal();
+    }
+
+    private void CloseBlockModal()
+    {
+        showBlockModal = false;
+        pendingBlockTask = null;
+        pendingBlockStatusId = 0;
+        blockReasonInput = string.Empty;
+        blockModalTaskLabel = string.Empty;
+        blockModalStatusLabel = string.Empty;
+    }
+
+    private async System.Threading.Tasks.Task ApplyStatusChange(TaskItem item, long newStatusId, string? statusReason)
+    {
+        var response = taksUpdateEngine.Execute(new TaskUpdateRequest
+        {
+            Id = item.Id,
+            TicketId = item.TicketId,
+            Description = item.TaskDescription,
+            TimeEstimationHours = item.TimeEstimationHours,
+            TaskStatusId = newStatusId,
+            IsWithinOriginalScope = item.IsWithinOriginalScope,
+            ScopeChangeReason = item.ScopeChangeReason,
+            StatusChangeReason = statusReason,
+            DevelopmentPhaseId = item.DevelopmentPhaseId,
+            Context = context
+        });
+
+        if (!response.Success)
+            await JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+        else
+            LoadTasks();
+    }
+
+    private bool IsBlockStatus(long statusId)
+    {
+        var label = taskStatuses.FirstOrDefault(s => s.Id == statusId)?.Description
+            ?? kanbanColumns.FirstOrDefault(c => c.Id == statusId)?.Title;
+        return TaskStatusHelper.RequiresBlockReason(label);
+    }
+
+    private bool IsFinalizedStatus(long statusId)
+    {
+        var label = taskStatuses.FirstOrDefault(s => s.Id == statusId)?.Description
+            ?? kanbanColumns.FirstOrDefault(c => c.Id == statusId)?.Title;
+        return FinalizeStatusHelper.IsTaskFinalized(label);
+    }
+
+    private void OpenRequirementPanel(TaskItem item)
+    {
+        descriptionPanelTask = item;
+        showDescriptionPanel = true;
+    }
+
+    private void OpenProgressPanelFromDescriptionPanel(TaskItem item)
+    {
+        showDescriptionPanel = false;
+        descriptionPanelTask = null;
+        OpenProgressPanel(item);
+    }
+
+    private void OpenHoursPanelFromDescriptionPanel(TaskItem item)
+    {
+        showDescriptionPanel = false;
+        descriptionPanelTask = null;
+        OpenHoursPanel(item);
+    }
+
+    private void OpenProgressPanel(TaskItem item)
+    {
+        if (!perms.CanView) return;
+        progressPanelTask = item;
+        showProgressPanel = true;
+        LoadProgressPanel(item.Id);
+    }
+
+    private void OpenHoursPanelFromProgressPanel(TaskItem item)
+    {
+        showProgressPanel = false;
+        progressPanelTask = null;
+        progressPanelData = null;
+        progressPanelError = null;
+        OpenHoursPanel(item);
+    }
+
+    private void LoadProgressPanel(long taskId)
+    {
+        progressPanelLoading = true;
+        progressPanelError = null;
+        progressPanelData = null;
+
+        var response = taskTimeLogListEngine.Execute(new TaskTimeLogListRequest
+        {
+            TaskId = taskId,
+            Context = context
+        });
+
+        progressPanelLoading = false;
+
+        if (!response.Success)
+        {
+            progressPanelError = string.IsNullOrWhiteSpace(response.Message?.Description)
+                ? "No se pudo cargar el historial de horas."
+                : response.Message.Description;
+            return;
+        }
+
+        progressPanelData = response.Data;
+    }
+
+    private System.Threading.Tasks.Task OnProgressPanelChanged(bool open)
+    {
+        showProgressPanel = open;
+        if (!open)
+        {
+            progressPanelTask = null;
+            progressPanelData = null;
+            progressPanelError = null;
+            progressPanelLoading = false;
+        }
+        return System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private string GetProgressPanelSubtitle() =>
+        progressPanelTask == null
+            ? string.Empty
+            : $"#{progressPanelTask.Id} · {progressPanelTask.TaskDescription}";
+
+    private System.Threading.Tasks.Task OnHoursPanelChanged(bool open)
+    {
+        showHoursPanel = open;
+        if (!open)
+            CloseHoursPanel();
+        return System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private string GetHoursPanelSubtitle() =>
+        hoursPanelTask == null
+            ? string.Empty
+            : $"#{hoursPanelTask.Id} · {hoursPanelTask.TaskDescription}";
+
+    private static string FormatProgressHours(decimal hours) =>
+        hours.ToString("0.##", hoursModalCulture);
+
+    private System.Threading.Tasks.Task OnDescriptionPanelChanged(bool open)
+    {
+        showDescriptionPanel = open;
+        if (!open)
+            descriptionPanelTask = null;
+        return System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private string GetRequirementPanelSubtitle() =>
+        descriptionPanelTask == null
+            ? string.Empty
+            : $"Tarea #{descriptionPanelTask.Id}";
+
+    private void GoToTaskDetailFromPanel()
+    {
+        if (descriptionPanelTask != null)
+            GoToTaskDetail(descriptionPanelTask);
+    }
+
+    private void GoToTaskDetail(TaskItem item)
+    {
+        if (item == null || item.Id <= 0)
+            return;
+
+        showDescriptionPanel = false;
+        descriptionPanelTask = null;
+        NavigationManager.NavigateTo(AppRoutes.TaskDetail(item.Id));
+    }
+
+    private string searchInput
+    {
+        get => searchText ?? string.Empty;
+        set
+        {
+            searchText = value;
+            tableState.SearchText = value;
+            tableState.ResetPage();
+            ApplyView();
+        }
+    }
+
+    private void FilterEnterpriseChange(long id)
+    {
+        enterpriseValue = id;
+        customerValue = 0;
+        projectValue = 0;
+        requirementValue = 0;
+        customerList = enterpriseValue > 0
+            ? customerReadEngine.GetCustomersByEnterprise(new CustomerReadRequest { EnterpriseId = enterpriseValue }).Data?.Customers?.ToList() ?? new()
+            : allCustomers.ToList();
+        projectList = new();
+        requirementList = new();
+        RefreshFacetOptions();
+        LoadTasks();
+    }
+
+    private void FilterCustomerChange(long id)
+    {
+        customerValue = id;
+        projectValue = 0;
+        requirementValue = 0;
+        projectList = customerValue > 0
+            ? projectReadEngine.GetProjectsByCustomer(new ProjectReadRequest { CustomerId = customerValue }).Data?.Projects ?? new()
+            : new();
+        requirementList = new();
+        RefreshFacetOptions();
+        LoadTasks();
+    }
+
+    private void FilterProjectChange(long id)
+    {
+        projectValue = id;
+        requirementValue = 0;
+        requirementList = projectValue > 0
+            ? catalogEngine.GetTickets(new GetTicketRequest { ProjectId = projectValue }).Data ?? new()
+            : new();
+        RefreshFacetOptions();
+        LoadTasks();
+    }
+
+    private void FilterRequirementChange(long id)
+    {
+        requirementValue = id;
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        LoadTasks();
+    }
+
+    private void FilterTaskStatusChange(IReadOnlySet<long> ids)
+    {
+        taskStatusIds = new HashSet<long>(ids);
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        LoadTasks();
+    }
+
+    private void FilterDeveloperChange(IReadOnlySet<long> ids)
+    {
+        developerIds = new HashSet<long>(ids);
+        if (developerIds.Count > 0)
+            onlyAssignedToMe = false;
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        LoadTasks();
+    }
+
+    private void OnDelayedChange(ChangeEventArgs e)
+    {
+        onlyDelayed = e.Value is bool b && b;
+        tableState.ResetPage();
+        LoadTasks();
+    }
+
+    private void OnWithBugsChange(ChangeEventArgs e)
+    {
+        onlyWithBugs = e.Value is bool b && b;
+        tableState.ResetPage();
+        LoadTasks();
+    }
+
+    private void OnAssignedToMeChange(ChangeEventArgs e)
+    {
+        onlyAssignedToMe = e.Value is bool b && b;
+        if (onlyAssignedToMe)
+            developerIds = new HashSet<long>();
+        tableState.ResetPage();
+        LoadTasks();
+    }
+
+    private void OnViewModeChanged(string mode) => viewMode = mode;
+
+    private int GetActiveFilterCount()
+    {
+        var count = 0;
+        if (enterpriseValue > 0) count++;
+        if (customerValue > 0) count++;
+        if (projectValue > 0) count++;
+        if (requirementValue > 0) count++;
+        if (FacetFilter.IsActive(taskStatusIds, taskStatuses.Count)) count++;
+        if (!isDeveloperRole && FacetFilter.IsActive(developerIds, developers.Count)) count++;
+        if (onlyDelayed) count++;
+        if (onlyWithBugs) count++;
+        if (onlyAssignedToMe && !isDeveloperRole) count++;
+        if (DatePeriodHelper.IsFilterActive(datePreset, startDate, endDate)) count++;
+        return count;
+    }
+
+    private void ClearFilters()
+    {
+        enterpriseValue = 0;
+        customerValue = 0;
+        projectValue = 0;
+        requirementValue = 0;
+        taskStatusIds = new HashSet<long>();
+        developerIds = new HashSet<long>();
+        onlyDelayed = false;
+        onlyWithBugs = false;
+        onlyAssignedToMe = false;
+        selectedTaskIds.Clear();
+        datePreset = DatePeriodHelper.DefaultPreset;
+        DatePeriodHelper.ApplyPreset(datePreset, out startDate, out endDate);
+        customerList = allCustomers.ToList();
+        projectList = new();
+        requirementList = new();
+        tableState.ResetPage();
+        RefreshFacetOptions();
+        LoadTasks();
+    }
+
+    private void GoToCreate()
+    {
+        if (!perms.CanCreate) return;
+        NavigationManager.NavigateTo("/create-task/0");
+    }
+
+    private void GoToEdit(long taskId)
+    {
+        if (!perms.CanEdit) return;
+        NavigationManager.NavigateTo($"/create-task/{taskId}");
+    }
+
+    private void GoToBulkImport()
+    {
+        if (!perms.CanCreate) return;
+        var query = BuildQueryString();
+        NavigationManager.NavigateTo($"/task-management/import{query}");
+    }
+
+    private string BuildQueryString() =>
+        $"?start={startDate:yyyy-MM-dd}&end={endDate:yyyy-MM-dd}&enterpriseId={enterpriseValue}&customerId={customerValue}&projectId={projectValue}&developerId={FacetFilter.ToApiSingleId(developerIds)}";
+
+    private void removeTask(TaskItem item)
+    {
+        if (!perms.CanDelete) return;
+        var response = taksDeletionEngine.Execute(new TaskDeletionRequest { TaskId = item.Id, Context = context });
+        if (!response.Success) JSRuntime.InvokeVoidAsync("alert", response.Message.Description);
+        LoadTasks();
+    }
+
+    private void OpenHoursPanel(TaskItem item)
+    {
+        if (!perms.CanView) return;
+        hourTypes = catalogEngine.GetCatalog<HourType>().Data ?? new();
+        hoursPanelTask = item;
+        hoursModalTaskId = item.Id;
+        hoursModalCurrentProgress = item.ProgressPercent;
+        hoursModalMinutes = MinutesStep;
+        hoursModalDayProgress = 0;
+        hoursModalHourTypeId = GetDefaultTechnicalHourTypeId();
+        hoursModalDate = DateTime.Today;
+        hoursModalError = null;
+        showHoursPanel = true;
+    }
+
+    private long GetDefaultTechnicalHourTypeId()
+    {
+        var technical = hourTypes.FirstOrDefault(h =>
+            h.Description.Contains("técn", StringComparison.OrdinalIgnoreCase)
+            || h.Description.Contains("tecnic", StringComparison.OrdinalIgnoreCase));
+
+        return technical?.Id
+            ?? hourTypes.FirstOrDefault(h => h.Id == 2)?.Id
+            ?? hourTypes.OrderBy(h => h.Order).FirstOrDefault()?.Id
+            ?? 0;
+    }
+
+    private void CloseHoursPanel()
+    {
+        showHoursPanel = false;
+        hoursPanelTask = null;
+        hoursModalTaskId = 0;
+        hoursModalMinutes = MinutesStep;
+        hoursModalDayProgress = 0;
+        hoursModalCurrentProgress = 0;
+        hoursModalHourTypeId = 0;
+        hoursModalDate = DateTime.Today;
+        hoursModalError = null;
+    }
+
+    private static DateTime GetHoursModalMinDate() => DateTime.Today.AddDays(-2);
+
+    private static DateTime GetHoursModalMaxDate() => DateTime.Today;
+
+    private void OnHoursModalDateChange(ChangeEventArgs e)
+    {
+        if (!DateTime.TryParse(e.Value?.ToString(), out var date))
+            return;
+
+        hoursModalDate = date.Date;
+        hoursModalError = null;
+    }
+
+    private decimal GetMaxDayProgress() => Math.Max(0, 100 - hoursModalCurrentProgress);
+
+    private decimal GetProjectedProgress() =>
+        Math.Min(100, hoursModalCurrentProgress + Math.Max(0, hoursModalDayProgress));
+
+    private bool IsTaskProgressComplete() => hoursModalCurrentProgress >= 100;
+
+    private void DecreaseMinutes()
+    {
+        if (IsTaskProgressComplete()) return;
+        hoursModalMinutes = Math.Max(MinutesStep, NormalizeMinutes(hoursModalMinutes) - MinutesStep);
+    }
+
+    private void IncreaseMinutes()
+    {
+        if (IsTaskProgressComplete()) return;
+        hoursModalMinutes = NormalizeMinutes(hoursModalMinutes) + MinutesStep;
+    }
+
+    private void DecreaseProgress()
+    {
+        if (!CanRegisterDayProgress()) return;
+        hoursModalDayProgress = Math.Max(0, NormalizeProgress(hoursModalDayProgress) - ProgressStep);
+    }
+
+    private void IncreaseProgress()
+    {
+        if (!CanRegisterDayProgress()) return;
+        hoursModalDayProgress = Math.Min(GetMaxDayProgress(), NormalizeProgress(hoursModalDayProgress) + ProgressStep);
+    }
+
+    private bool CanRegisterDayProgress() =>
+        hoursPanelTask != null
+        && !string.IsNullOrWhiteSpace(hoursPanelTask.UserName)
+        && string.Equals(
+            hoursPanelTask.UserName.Trim(),
+            context.Name.Trim(),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static int NormalizeMinutes(int minutes)
+    {
+        if (minutes <= 0)
+            return 0;
+
+        return (int)(Math.Round(minutes / (double)MinutesStep, MidpointRounding.AwayFromZero) * MinutesStep);
+    }
+
+    private static decimal NormalizeProgress(decimal progress)
+    {
+        if (progress <= 0)
+            return 0;
+
+        return Math.Round(progress / ProgressStep, MidpointRounding.AwayFromZero) * ProgressStep;
+    }
+
+    private string FormatHoursFromMinutes(int minutes) =>
+        FormatProgressHours(minutes / 60m);
+
+    private void SaveHours()
+    {
+        if (!perms.CanView) return;
+        hoursModalError = null;
+
+        if (IsTaskProgressComplete())
+        {
+            hoursModalError = "No se pueden registrar horas cuando la tarea está al 100% de avance.";
+            return;
+        }
+
+        var minDate = GetHoursModalMinDate();
+        var maxDate = GetHoursModalMaxDate();
+        if (hoursModalDate.Date < minDate || hoursModalDate.Date > maxDate)
+        {
+            hoursModalError = "Seleccione una fecha dentro de los últimos 3 días.";
+            return;
+        }
+
+        hoursModalMinutes = NormalizeMinutes(hoursModalMinutes);
+        if (hoursModalMinutes < MinutesStep)
+        {
+            hoursModalError = $"Ingrese al menos {MinutesStep} minutos trabajados.";
+            return;
+        }
+
+        if (hoursModalHourTypeId <= 0)
+        {
+            hoursModalError = "Seleccione un tipo de hora.";
+            return;
+        }
+
+        hoursModalDayProgress = NormalizeProgress(hoursModalDayProgress);
+        if (!CanRegisterDayProgress())
+            hoursModalDayProgress = 0;
+        else
+        {
+            if (hoursModalDayProgress > GetMaxDayProgress())
+                hoursModalDayProgress = GetMaxDayProgress();
+
+            if (hoursModalDayProgress < 0)
+            {
+                hoursModalError = "El avance del día no puede ser negativo.";
+                return;
+            }
+
+            if (hoursModalCurrentProgress + hoursModalDayProgress > 100)
+            {
+                hoursModalError = $"El avance total no puede superar el 100 % (máximo {GetMaxDayProgress():0.#}% hoy).";
+                return;
+            }
+        }
+
+        var usedHours = hoursModalMinutes / 60m;
+        var savedTaskId = hoursModalTaskId;
+
+        var response = timeLogRegistrationEngine.Execute(new TimeLogRegistrationRequest
+        {
+            TaskId = hoursModalTaskId,
+            ExecutionDate = hoursModalDate,
+            UsedHours = usedHours,
+            ProgressPercent = hoursModalDayProgress,
+            HourTypeId = hoursModalHourTypeId,
+            Context = context
+        });
+
+        if (!response.Success)
+        {
+            hoursModalError = string.IsNullOrWhiteSpace(response.Message?.Description)
+                ? "No se pudieron registrar las horas."
+                : response.Message.Description;
+            return;
+        }
+
+        CloseHoursPanel();
+        LoadTasks();
+
+        if (showProgressPanel && progressPanelTask != null && progressPanelTask.Id == savedTaskId)
+            LoadProgressPanel(savedTaskId);
+    }
+
+    private static string GetScopeLabel(bool withinScope) => withinScope ? "Sí" : "No";
+
+    private static string GetScopeBadgeClass(bool withinScope) =>
+        StatusBadgeHelper.TableBadgeBase + "font-semibold " +
+        (withinScope ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800");
+
+    private static string GetPhaseBadgeClass() =>
+        StatusBadgeHelper.TableBadgeBase + "max-w-full truncate font-semibold whitespace-nowrap bg-indigo-50 text-indigo-800";
+
+    private static string GetDeveloperInitials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "?";
+
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}"
+            : parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant();
+    }
+
+    private static int GetPanelHoursProgressPercent(TaskItem item)
+    {
+        if (item.TimeEstimationHours <= 0)
+            return item.TotalHoursWorked > 0 ? 100 : 0;
+
+        return (int)Math.Min(100, Math.Round(item.TotalHoursWorked / item.TimeEstimationHours * 100m));
+    }
+
+    private static string GetPanelProgressHint(TaskItem item)
+    {
+        if (item.ProgressPercent >= 100)
+            return "Tarea completada";
+
+        if (item.ProgressPercent >= 75)
+            return "En etapa final";
+
+        if (item.ProgressPercent > 0)
+            return "En progreso";
+
+        return "Sin avance registrado";
+    }
+
+    private static string GetPanelRemainingHoursLabel(TaskItem item)
+    {
+        var remaining = item.TimeEstimationHours - item.TotalHoursWorked;
+        if (remaining > 0)
+            return $"{FormatPanelHours(remaining)} restantes";
+
+        if (remaining < 0)
+            return $"{FormatPanelHours(Math.Abs(remaining))} sobre el presupuesto";
+
+        return "Presupuesto agotado";
+    }
+
+    private static HoursFeasibilityInfo GetHoursFeasibility(decimal timeEstimationHours, decimal totalHoursWorked, int progressPercent)
+    {
+        if (progressPercent >= 100)
+        {
+            return new HoursFeasibilityInfo(
+                "Tarea completada",
+                "No queda avance pendiente por cubrir.",
+                "border-green-200 bg-green-50/70",
+                "text-green-800",
+                "check-circle",
+                "bg-green-100",
+                "text-green-700");
+        }
+
+        if (timeEstimationHours <= 0)
+        {
+            return new HoursFeasibilityInfo(
+                "Sin estimación",
+                "Defina horas estimadas para evaluar si el presupuesto alcanza para el avance restante.",
+                "border-gray-200 bg-gray-50/80",
+                "text-gray-700",
+                "help-circle",
+                "bg-gray-100",
+                "text-gray-500");
+        }
+
+        var remainingProgress = 100 - progressPercent;
+        var remainingHours = timeEstimationHours - totalHoursWorked;
+
+        if (progressPercent <= 0)
+        {
+            if (totalHoursWorked > 0)
+            {
+                return new HoursFeasibilityInfo(
+                    "Sin avance medible",
+                    $"Hay {FormatPanelHours(totalHoursWorked)} registradas, pero el avance sigue en 0%. Registre avance para proyectar si alcanzan las horas.",
+                    "border-amber-200 bg-amber-50/70",
+                    "text-amber-800",
+                    "alert-triangle",
+                    "bg-amber-100",
+                    "text-amber-700");
+            }
+
+            return new HoursFeasibilityInfo(
+                "Presupuesto inicial",
+                $"Quedan {FormatPanelHours(remainingHours)} disponibles para completar el 100% de la tarea.",
+                "border-sky-200 bg-sky-50/70",
+                "text-sky-800",
+                "info",
+                "bg-sky-100",
+                "text-sky-700");
+        }
+
+        decimal projectedHoursNeeded;
+        string projectionBasis;
+
+        if (totalHoursWorked > 0)
+        {
+            projectedHoursNeeded = totalHoursWorked * remainingProgress / progressPercent;
+            projectionBasis = "según el ritmo actual de horas y avance";
+        }
+        else
+        {
+            projectedHoursNeeded = timeEstimationHours * remainingProgress / 100m;
+            projectionBasis = "según la estimación planificada";
+        }
+
+        if (remainingHours <= 0)
+        {
+            return new HoursFeasibilityInfo(
+                "Presupuesto agotado",
+                $"Para el {remainingProgress}% restante se proyectan ~{FormatPanelHours(projectedHoursNeeded)} ({projectionBasis}) y no quedan horas en el presupuesto.",
+                "border-red-200 bg-red-50/70",
+                "text-red-800",
+                "x-circle",
+                "bg-red-100",
+                "text-red-700");
+        }
+
+        var margin = remainingHours - projectedHoursNeeded;
+        var tightThreshold = Math.Max(0.5m, projectedHoursNeeded * 0.1m);
+
+        if (margin < 0)
+        {
+            return new HoursFeasibilityInfo(
+                "No alcanzan",
+                $"Para el {remainingProgress}% restante se proyectan ~{FormatPanelHours(projectedHoursNeeded)} ({projectionBasis}); solo quedan {FormatPanelHours(remainingHours)} (faltan ~{FormatPanelHours(Math.Abs(margin))}).",
+                "border-red-200 bg-red-50/70",
+                "text-red-800",
+                "x-circle",
+                "bg-red-100",
+                "text-red-700");
+        }
+
+        if (margin <= tightThreshold)
+        {
+            return new HoursFeasibilityInfo(
+                "Alcanzan justo",
+                $"Para el {remainingProgress}% restante se proyectan ~{FormatPanelHours(projectedHoursNeeded)} ({projectionBasis}); quedan {FormatPanelHours(remainingHours)} (margen ~{FormatPanelHours(margin)}).",
+                "border-amber-200 bg-amber-50/70",
+                "text-amber-800",
+                "alert-triangle",
+                "bg-amber-100",
+                "text-amber-700");
+        }
+
+        return new HoursFeasibilityInfo(
+            "Sí alcanzan",
+            $"Para el {remainingProgress}% restante se proyectan ~{FormatPanelHours(projectedHoursNeeded)} ({projectionBasis}); quedan {FormatPanelHours(remainingHours)} (margen ~{FormatPanelHours(margin)}).",
+            "border-green-200 bg-green-50/70",
+            "text-green-800",
+            "check-circle",
+            "bg-green-100",
+            "text-green-700");
+    }
+
+    private static string FormatPanelHours(decimal hours) =>
+        $"{FormatProgressHours(hours)} h";
+
+    private sealed record HoursFeasibilityInfo(
+        string Title,
+        string Detail,
+        string BorderClass,
+        string TitleClass,
+        string IconName,
+        string IconBgClass,
+        string IconClass);
+}

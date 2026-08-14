@@ -1,0 +1,22 @@
+﻿@if (State.TotalItems > 0)
+{
+    <div class="mt-2 flex flex-wrap items-center justify-end gap-2">
+        <div class="flex items-center gap-1">
+            <button type="button" class="@Tw.BtnOutline !py-1 !px-2 text-xs" disabled="@(State.CurrentPage <= 1)" @onclick="() => ChangePage(State.CurrentPage - 1)">Anterior</button>
+            <button type="button" class="@Tw.BtnOutline !py-1 !px-2 text-xs" disabled="@(State.CurrentPage >= State.TotalPages)" @onclick="() => ChangePage(State.CurrentPage + 1)">Siguiente</button>
+        </div>
+        <span class="text-xs text-gray-400">@State.TotalItems @ItemLabel · Pág. @State.CurrentPage/@State.TotalPages</span>
+    </div>
+}
+
+@code {
+    [Parameter] public PagedTableState State { get; set; } = new();
+    [Parameter] public string ItemLabel { get; set; } = "registros";
+    [Parameter] public EventCallback OnPageChanged { get; set; }
+
+    private async Task ChangePage(int page)
+    {
+        State.GoToPage(page);
+        await OnPageChanged.InvokeAsync();
+    }
+}
